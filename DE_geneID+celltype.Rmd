@@ -1,0 +1,276 @@
+---
+title: "DE_geneID-celltype"
+author: "Heesoo Song"
+date: '2021 12 1 '
+output: html_document
+---
+
+Extension of *DE_EdgeR.Rmd*. Here, we will create aggregate matrix to observe change spanning over celltype rather than time point.
+
+```{r}
+#install.packages('Matrix.utils')
+#install.packages("statmod")
+#BiocManager::install("org.Mm.eg.db")
+```
+
+
+```{r, message = FALSE}
+library(SeuratObject)
+library(Seurat)
+library(nichenetr)
+library(tidyverse)
+library("ggplot2")
+library(muscat)
+library(SingleCellExperiment)
+library(purrr)
+library(Matrix.utils)
+```
+
+```{r, cache = TRUE}
+# Load processed expression data of interacting cells
+hepatectomy_expression = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+
+# Total 91021 cells, with 5000 genes
+```
+
+```{r}
+celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+```
+
+```{r}
+hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
+```
+
+
+# Create Aggregate Count Matrix
+
+```{r}
+# Extract raw counts and metadata to create SingleCellExperiment object
+counts <- hepa_celltypeOI@assays$RNA@counts
+metadata <- hepa_celltypeOI@meta.data
+
+# Set up metadata as desired for aggregation and DE analysis
+metadata$cluster_id <- factor(hepa_celltypeOI@active.ident)
+#metadata$cluster_sample <- paste0(factor(metadata$cluster_id), ".", factor(metadata$time_experiment)) # This line is added
+
+# Create single cell experiment object
+sce <- SingleCellExperiment(assays = list(counts = counts),
+                            colData = metadata)
+
+```
+
+
+```{r}
+#Named vector of cluster names
+kids <- purrr::set_names(levels(sce$cluster_id))
+kids
+
+#Total number of clusters
+nk <- length(kids)
+nk
+
+#Named vector of sample names
+sids <- purrr::set_names(levels(factor(sce$time_experiment)))
+#sids <- purrr::set_names(levels(factor(sce$cluster_sample)))
+sids[1:10]
+
+#Total number of samples
+ns <- length(sids)
+ns
+```
+
+```{r}
+# Generate sample level metadata
+
+## Determine the number of cells per sample
+table(sce$time_experiment)
+
+## Turn named vector into a numeric vector of cells per sample
+n_cells <- as.numeric(table(sce$time_experiment))
+
+## Determine how to reorder the samples (rows) of the metadata to match the order of sample names in sids vector
+m <- match(sids, sce$time_experiment)
+
+
+## Create the sample level metadata by combining the reordered metadata with the number of cells corresponding to each sample.
+ei <- data.frame(colData(sce)[m, ], 
+                 n_cells, row.names = NULL) %>% 
+  select(-"cluster_id")
+head(ei)
+```
+
+```{r}
+# Identify groups for aggregation of counts
+groups <- colData(sce)[, c("cluster_id", "time_experiment")]
+```
+
+```{r}
+counts(sce)[1:6,1:6]
+```
+
+
+```{r}
+# Create aggregate matrix
+pb <- aggregate.Matrix(t(counts(sce)),
+                       groupings = groups, fun = "sum")
+
+class(pb)
+dim(pb)
+pb[1:6, 1:6]
+```
+
+```{r}
+# Not every cluster is present in all samples; create a vector that represents how to split samples
+# But actually we do have all cell types! :) Maybe skip this step
+splitf <- sapply(stringr::str_split(rownames(pb), pattern="_", n=2), '[', 1)
+```
+
+```{r}
+# Turn into a list and split the list into components for each cluster and transform, so rows are genes and columns are samples and make rownames as the sample IDs
+library(magrittr)
+pb <- split.data.frame(pb, 
+                       factor(splitf)) %>%
+  lapply(function(u) 
+    set_colnames(t(u), 
+                 stringr::str_extract(rownames(u), "(?<=_)[:alnum:]+_phase_[0-9]"))) 
+
+class(pb)
+
+# Explore the different components of list
+names(pb)
+```
+```{r}
+pb[[1]][1:6, 1:6]
+```
+
+```{r}
+#Change row names into geneID + celltype
+for (i in 1:length(names(pb))){
+  rownames(pb[[i]]) <- paste0(rownames(pb[[i]]), ".", names(pb)[i])
+}
+
+pb[[1]][1:6, 1:6]
+```
+
+
+```{r}
+# Combine matrices
+pb_combined <- pb[[1]]
+dim(pb_combined)
+
+for (i in 2:length(names(pb))) {
+  pb_combined <- rbind(pb_combined, pb[[i]])
+}
+dim(pb_combined)
+pb_combined[1:6, 1:12]
+```
+
+
+```{r}
+# Print out the table of cells in each cluster-sample group
+options(width = 100)
+table(sce$cluster_id, sce$time_experiment)
+```
+
+# 2. Differential gene expression
+The aim is to examine the relationship between gene abundances and time points per each cell-type. Given enough number of time points, it is reasonable to assume smooth changes in gene expression. In this way, polynomial or a cubic spline curve can be used to model gene expression along time with a certain number of degrees of freedom.
+
+
+Perform DE analysis
+```{r}
+cluster_counts <- as.data.frame(as.matrix(pb_combined))
+colnames(cluster_counts)
+
+#reorder columns
+cluster_counts <- cluster_counts[, c(1,6,10,2,5,7,8,9,11,12,3,4)]
+colnames(cluster_counts)
+```
+
+Explore aggregated count data by MDS (multi-dimensional scaling) plots. This visualizes the differences between the expression profiles of different samples (cholangiocyte) in two dimensions.
+```{r}
+library(edgeR)
+plotMDS(cluster_counts, labels=colnames(cluster_counts))
+```
+
+
+```{r}
+hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+# X <- poly(hours, degree=3)
+# design <- model.matrix(~X)
+# design
+```
+
+Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
+```{r}
+library(splines)
+X <- ns(hours, df = 3)
+design <- model.matrix(~X)
+design
+```
+Estimate dispersion. The negative binomial (NB) dispersion is estimated. This returns the **DGEList** object with additional entries for the estimated NB dispersion for each gene.
+```{r}
+y <- DGEList(counts = cluster_counts, group = hours)
+y <- estimateDisp(y, design)
+sqrt(y$common.dispersion)
+
+# plot the tagwise dispersion against log2-CPM (counts per million)
+plotBCV(y)
+```
+
+
+Fit a quasi-likelihood NB generalized log-linear model
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+```
+
+Fit a quasi-likelihood negative binomial generalized log-linear model to count data.
+```{r}
+fit <- glmQLFTest(fit, coef=2:4)
+```
+
+Multiple testing across genes and contrasts. The default threshold is p-value < 0.05. 
+```{r}
+summary(decideTests(fit))
+```
+
+```{r}
+# Genes with most significant time effects
+tab <- as.data.frame(topTags(fit, n=15410))
+head(tab)
+```
+```{r}
+extract_geneID <- as.data.frame(str_split(rownames(tab), "[.]", simplify=TRUE))
+```
+
+Change ENSEMBL gene IDs to gene symbols
+```{r}
+library(org.Mm.eg.db)
+IDlist <- mapIds(org.Mm.eg.db, extract_geneID$V1, keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+tab$Symbol <- IDlist
+tab$ENSEMBL <- extract_geneID$V1
+tab$celltype <- extract_geneID$V2
+head(tab)
+```
+
+```{r}
+write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_SignificantGenes.csv", sep = ",")
+```
+
+
+```{r}
+logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
+logCPM.fit <- cpm(fit, log=TRUE)
+```
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  FlybaseID <- row.names(tab)[i]
+  Symbol <- tab$Symbol[i]
+  logCPM.obs.i <- logCPM.obs[FlybaseID,]
+  logCPM.fit.i <- logCPM.fit[FlybaseID,]
+  plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
+  lines(hours, logCPM.fit.i, col="red", lwd=2)
+}
+```
