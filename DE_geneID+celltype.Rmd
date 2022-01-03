@@ -1,5 +1,5 @@
 ---
-title: "DE_geneID-celltype"
+title: "DE_pseudobulk"
 author: "Heesoo Song"
 date: '2021 12 1 '
 output: html_document
@@ -24,9 +24,11 @@ library(muscat)
 library(SingleCellExperiment)
 library(purrr)
 library(Matrix.utils)
+library(RColorBrewer)
+library(pheatmap)
 ```
 
-```{r, cache = TRUE}
+```{r}
 # Load processed expression data of interacting cells
 hepatectomy_expression = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
 
@@ -39,6 +41,10 @@ celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte"
 
 ```{r}
 hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
+
+experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+
+hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
 ```
 
 
@@ -91,12 +97,6 @@ n_cells <- as.numeric(table(sce$time_experiment))
 ## Determine how to reorder the samples (rows) of the metadata to match the order of sample names in sids vector
 m <- match(sids, sce$time_experiment)
 
-
-## Create the sample level metadata by combining the reordered metadata with the number of cells corresponding to each sample.
-ei <- data.frame(colData(sce)[m, ], 
-                 n_cells, row.names = NULL) %>% 
-  select(-"cluster_id")
-head(ei)
 ```
 
 ```{r}
@@ -139,6 +139,7 @@ class(pb)
 # Explore the different components of list
 names(pb)
 ```
+
 ```{r}
 pb[[1]][1:6, 1:6]
 ```
@@ -180,10 +181,6 @@ Perform DE analysis
 ```{r}
 cluster_counts <- as.data.frame(as.matrix(pb_combined))
 colnames(cluster_counts)
-
-#reorder columns
-cluster_counts <- cluster_counts[, c(1,6,10,2,5,7,8,9,11,12,3,4)]
-colnames(cluster_counts)
 ```
 
 Explore aggregated count data by MDS (multi-dimensional scaling) plots. This visualizes the differences between the expression profiles of different samples (cholangiocyte) in two dimensions.
@@ -203,14 +200,19 @@ hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
 Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
 ```{r}
 library(splines)
-X <- ns(hours, df = 3)
+X <- ns(hours, df = 5)
 design <- model.matrix(~X)
 design
 ```
 Estimate dispersion. The negative binomial (NB) dispersion is estimated. This returns the **DGEList** object with additional entries for the estimated NB dispersion for each gene.
 ```{r}
 y <- DGEList(counts = cluster_counts, group = hours)
-y <- estimateDisp(y, design)
+
+# filter out lowly expressed genes
+keep <- filterByExpr(y)
+y <- y[keep, , keep.lib.sizes = FALSE]
+
+y <- estimateDisp(y, design) # reduced from 134596 genes -> 92949 genes
 sqrt(y$common.dispersion)
 
 # plot the tagwise dispersion against log2-CPM (counts per million)
@@ -226,19 +228,26 @@ plotQLDisp(fit)
 
 Fit a quasi-likelihood negative binomial generalized log-linear model to count data.
 ```{r}
-fit <- glmQLFTest(fit, coef=2:4)
+fit <- glmQLFTest(fit, coef=2:6)
 ```
 
 Multiple testing across genes and contrasts. The default threshold is p-value < 0.05. 
 ```{r}
-summary(decideTests(fit))
+sig_num <- summary(decideTests(fit))
+sig_num
+# Before filtering: NotSig = 119186, Sig = 15410
+# After filtering: NotSig = 77693, Sig = 15256
 ```
 
 ```{r}
 # Genes with most significant time effects
-tab <- as.data.frame(topTags(fit, n=15410))
+tab <- as.data.frame(topTags(fit, n=1498)) #15256
 head(tab)
 ```
+
+LogFC = log fold change, log difference between groups.
+LogCPM = log count per million, measure of expression level.
+
 ```{r}
 extract_geneID <- as.data.frame(str_split(rownames(tab), "[.]", simplify=TRUE))
 ```
@@ -250,11 +259,14 @@ IDlist <- mapIds(org.Mm.eg.db, extract_geneID$V1, keytype="ENSEMBL", column="SYM
 tab$Symbol <- IDlist
 tab$ENSEMBL <- extract_geneID$V1
 tab$celltype <- extract_geneID$V2
+
+tab$Symbol[which(is.na(tab$Symbol))] <- tab$ENSEMBL[which(is.na(tab$Symbol))] #fill in NA with ENSEMBL ID
+tab$Symbol_celltype <- paste0(tab$Symbol, "_", tab$celltype)
 head(tab)
 ```
 
 ```{r}
-write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_SignificantGenes.csv", sep = ",")
+#write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_Filter_5param.csv", sep = ",")
 ```
 
 
@@ -263,14 +275,259 @@ logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
 logCPM.fit <- cpm(fit, log=TRUE)
 ```
 
+
+# 3. Examine significant genes
+## 3-1. Cluster Analysis
+
+
 ```{r}
-par(mfrow=c(2,2))
-for(i in 1:4) {
-  FlybaseID <- row.names(tab)[i]
-  Symbol <- tab$Symbol[i]
+# Clustering based on fitted values
+normalized_counts <- logCPM.fit
+
+# Extract normalized counts for only the significant genes
+sig_norm <- data.frame(normalized_counts) %>%
+  rownames_to_column(var = "gene") %>%
+  dplyr::filter(gene %in% rownames(tab)[1:sig_num[2]])
+
+colnames(sig_norm) <- c("gene", experiments)
+
+
+# Set up row names
+gene_symbol <- c()
+for (n in 1:length(sig_norm$gene)) {
+  gene_symbol[n] <- tab$Symbol_celltype[which(rownames(tab) == sig_norm$gene[n])]
+}
+```
+
+```{r}
+# There are multiple Mup13 in gene name
+# ENSMUSG00000078675, ENSMUSG00000096688
+
+gene_symbol[duplicated(gene_symbol)]
+```
+```{r}
+rownames(sig_norm) <- sig_norm[,"gene"]
+```
+
+### Calculate distance & cluster genes
+```{r}
+gene_dist <- dist(sig_norm[, 2:length(colnames(sig_norm))])
+gene_hclust <- hclust(gene_dist, method = "complete")
+```
+
+```{r}
+gene_cluster <- data.frame(cutree(gene_hclust, k = 50)) %>%
+  rownames_to_column()
+colnames(gene_cluster) <- c("gene", "cluster_number")
+head(gene_cluster)
+```
+
+### Plot clusters
+```{r}
+par(mfrow=c(2,3))
+
+for(i in 1:20) {
+  cluster_genes <- gene_cluster[gene_cluster$cluster_number == i, "gene"]
+  logCPM.fit.i <- data.frame(logCPM.fit[cluster_genes,])
+  
+  if (length(cluster_genes) > 1) {
+    plot(hours, logCPM.fit.i[1,], type = "l", ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"), pch=16)
+    for (j in 2:length(cluster_genes)) {
+      lines(hours, logCPM.fit.i[j,], lwd=2)
+    }
+  } else {
+    plot(hours, t(logCPM.fit.i), type = "l", ylab = "log_CPM", main=paste0("cluster ", i, ": 1 gene"), pch=16)
+  }
+}
+```
+
+### Save cluster number as csv
+```{r}
+cluster_number_merged <- merge(x = tab[1:sig_num[2],], y = gene_cluster, by.x = 0 , by.y = "gene", all = TRUE)
+head(cluster_number_merged)
+```
+
+```{r}
+#write.table(cluster_number_merged, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster.csv", sep = ",")
+```
+
+## 3-2. Common genes across cell types
+```{r}
+# Create false dataframe
+common_genes <- as.data.frame(matrix(data = FALSE, nrow = length(levels(factor(cluster_number_merged$ENSEMBL))), ncol=7))
+colnames(common_genes) <- celltype_OI
+rownames(common_genes) <- as.vector(levels(factor(cluster_number_merged$ENSEMBL)))
+
+# Change False into True if it exists in 
+for (n in 1:dim(cluster_number_merged)[1]) {
+  common_genes[cluster_number_merged$ENSEMBL[n], cluster_number_merged$celltype[n]] <- TRUE
+}
+
+common_genes["count"] <- rowSums(common_genes)
+
+head(common_genes)
+```
+
+```{r, message=FALSE}
+gene_symbol <- c()
+for (n in 1:dim(common_genes)[1]) {
+  gene_symbol[n] <- tab$Symbol[which(tab$ENSEMBL == rownames(common_genes)[n])][1]
+}
+
+common_genes["symbol"] <- gene_symbol
+
+head(common_genes)
+```
+
+```{r}
+#write.table(common_genes, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Dynamic_NicheNet/DE_pseudobulk_commonGenes.csv", sep = ",")
+```
+
+```{r}
+common_genes[common_genes$count == 7, "symbol"]
+```
+
+## 3-3. Heatmap
+
+Heatmap
+- explore clustering of the significant genes
+
+```{r}
+normalized_counts <- logCPM.obs
+
+# Extract normalized counts for only the significant genes
+sig_norm_heatmap <- data.frame(normalized_counts) %>%
+  rownames_to_column(var = "gene") %>%
+  dplyr::filter(gene %in% rownames(tab)[1:20])
+
+colnames(sig_norm_heatmap) <- c("gene", experiments)
+
+
+# Set up row names
+gene_symbol <- c()
+for (n in 1:length(sig_norm_heatmap$gene)) {
+  gene_symbol[n] <- tab$Symbol_celltype[which(rownames(tab) == sig_norm_heatmap$gene[n])]
+}
+
+rownames(sig_norm_heatmap) <- gene_symbol
+```
+
+```{r}
+# Set a color palette
+heat_colors <- brewer.pal(20, "RdYlBu")
+
+# Run pheatmap using the metadata for the annotation
+pheatmap(sig_norm_heatmap[, 2:length(colnames(sig_norm_heatmap))],
+         color = heat_colors,
+         cluster_rows = T,
+         cluster_cols = F, # Make this TRUE if you want to look cluster between different time points
+         show_rownames = T,
+         border_color = NA,
+         fontsize = 10,
+         scale = "row",
+         fontsize_row = 10,
+         height = 20,
+         main = paste0("Top DE gene clusters"))
+```
+
+Before filtering:  
+"Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial" are clustered together in the heatmap.  
+
+After filtering:  
+"Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Kif18b_endothelial" are clustered together. But still, Cdc20_endothelial exist in the significant gene list.
+
+Dlgap5  
+  - DLG Associated Protein 5  
+  - GO: Phosphoprotein phosphatase activity  
+  - Potential cell cycle regulator that may play a role in carcinogenesis of cancer cells  
+  - Disease associated: Hepatocellular carcinoma  
+  
+Plk1  
+  - Polo Like Kinase 1  
+  - GO: transferase activity, transferring phosphorus-containing groups, protein tyrosine kinase activity  
+  - Highly expressed during mitosis  
+  
+Cdc20  
+  - Cell Division Cycle 20  
+  - GO: enzyme binding, protein C-terminus binding  
+  - Regulatory protein interacting with several other proteins at multiple points in the cell cycle  
+  
+Kif18b  
+  - Kinesin Family Member 18B  
+  - GO: ATP hydrolysis activity, microtubule motor activity  
+  - In complex with Kif2c, constitutes the major microtubule plus-end depolymerizing activity in mitotic cells.   
+
+## 3-4. Plot important individual genes
+
+```{r}
+par(mfrow=c(2,3))
+#interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+#interesting_genes <- c("Osm_neutrophil", "Il1r1_hepatocyte","Csf1_neutrophil", "Cxcl1_stellate")
+#interesting_genes <- c("Il6_kupffer", "Tnf_kupffer", "Csf1_stellate","Cxcl1_hepatocyte", "Insr_endothelial", "Bmp10_stellate")
+
+FlybaseID_list = c()
+for(i in 1:length(interesting_genes)) {
+  FlybaseID <- rownames(tab)[which(tab$Symbol_celltype == interesting_genes[i])]
+  Symbol <- interesting_genes[i]
   logCPM.obs.i <- logCPM.obs[FlybaseID,]
   logCPM.fit.i <- logCPM.fit[FlybaseID,]
   plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
   lines(hours, logCPM.fit.i, col="red", lwd=2)
+  FlybaseID_list[i] <- FlybaseID
 }
 ```
+
+```{r}
+FlybaseID_list
+```
+
+## 3-5. Violin Plot
+Violin Plot
+- visualize single cell expression distributions in each cluster
+```{r}
+for (i in 1:length(FlybaseID_list)) {
+  feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
+  
+  hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
+  
+  print(VlnPlot(hepa_celltypeOI, group.by = "time_experiment", features = feature_OI[1], slot = "counts", pt.size = 0))
+}
+```
+
+##3-6. UMAP & Feature Plot
+
+Plot interesting genes back in UMAP and Feature plot
+```{r}
+Plot_features <- function(gene, cluster_OI) {
+
+  for (i in 1:12){
+    genename <- tab[which(rownames(tab) == paste0(gene, ".", cluster_OI)),"Symbol"]
+    
+    dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
+    jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
+    
+    subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
+    highlight_cells <- Cells(subset)
+    dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
+  
+    feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
+    featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
+    
+    print(dimplot + featureplotwithtitle)
+    
+    dev.off()
+  }
+}
+```
+
+```{r, message=FALSE}
+# for (i in 1:length(FlybaseID_list)) {
+#   feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
+#   
+#   hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
+#   
+#   Plot_features(feature_OI[1], feature_OI[2])
+# }
+```
+
