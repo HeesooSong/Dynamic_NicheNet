@@ -13,18 +13,22 @@ The first tutorial gave idea about making aggregate matrix as an alternative of 
 
 The second tutorial is about the analysis of time course data using EdgeR. 
 
-```{r, verbose = FALSE}
+```{r, message = FALSE}
 library(SeuratObject)
 library(Seurat)
 library(nichenetr)
 library(tidyverse)
 library("ggplot2")
 library(muscat)
+library(pheatmap)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(purrr)
 ```
 
-```{r, cache = TRUE}
+```{r}
 # Load processed expression data of interacting cells
-hepatectomy_expression = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+hepatectomy_expression <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
 
 # Total 91021 cells, with 5000 genes
 ```
@@ -34,12 +38,11 @@ celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte"
 ```
 
 ```{r}
-hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
-```
+hepa_celltypeOI <- subset(x = hepatectomy_expression, idents = celltype_OI)
 
-```{r, verbose = FALSE}
-library(SingleCellExperiment)
-library(purrr)
+experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+
+hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
 ```
 
 # Create Aggregate Count Matrix
@@ -51,7 +54,6 @@ metadata <- hepa_celltypeOI@meta.data
 
 # Set up metadata as desired for aggregation and DE analysis
 metadata$cluster_id <- factor(hepa_celltypeOI@active.ident)
-#metadata$cluster_sample <- paste0(factor(metadata$cluster_id), ".", factor(metadata$time_experiment)) # This line is added
 
 # Create single cell experiment object
 sce <- SingleCellExperiment(assays = list(counts = counts),
@@ -71,7 +73,6 @@ nk
 
 #Named vector of sample names
 sids <- purrr::set_names(levels(factor(sce$time_experiment)))
-#sids <- purrr::set_names(levels(factor(sce$cluster_sample)))
 sids[1:10]
 
 #Total number of samples
@@ -93,12 +94,6 @@ n_cells <- as.numeric(table(sce$time_experiment))
 m <- match(sids, sce$time_experiment)
 #m <- match(sids, sce$cluster_sample)
 
-
-## Create the sample level metadata by combining the reordered metadata with the number of cells corresponding to each sample.
-ei <- data.frame(colData(sce)[m, ], 
-                 n_cells, row.names = NULL) %>% 
-  select(-"cluster_id")
-head(ei)
 ```
 ```{r}
 # Identify groups for aggregation of counts
@@ -134,10 +129,6 @@ pb <- split.data.frame(pb,
     set_colnames(t(u), 
                  stringr::str_extract(rownames(u), "(?<=_)[:alnum:]+_phase_[0-9]")))
 
-class(pb)
-
-# Explore the different components of list
-str(pb)
 ```
 ```{r}
 # Print out the table of cells in each cluster-sample group
@@ -203,9 +194,11 @@ clusters = c("cholangiocyte", "endothelial", "hepatocyte", "kupffer", "monocyte"
 clusters <- levels(metadata$cluster_id)
 clusters
 
+cluster_OI <- clusters[3]
+
 ## DE analysis on cholangiocyte
 ### Subset the metadata to only
-cluster_metadata <- metadata[which(metadata$cluster_id == clusters[3]), ]
+cluster_metadata <- metadata[which(metadata$cluster_id == cluster_OI), ]
 head(cluster_metadata)
 
 ### Assign the rownames of the metadata to be the sample IDs
@@ -213,12 +206,9 @@ rownames(cluster_metadata) <- cluster_metadata$sample_id
 cluster_metadata
 
 ### Subset the counts to only the B cells
-counts <- pb[[clusters[3]]]
+counts <- pb[[cluster_OI]]
 
 cluster_counts <- as.data.frame(as.matrix(counts[, which(colnames(counts) %in% rownames(cluster_metadata))]))
-
-#reorder columns by time point
-cluster_counts <- cluster_counts[, c(1,6,10,2,5,7,8,9,11,12,3,4)]
 
 ### Check that all of the row names of the metadata are the same and in the same order as the column names of the counts
 all(rownames(cluster_metadata) == colnames(cluster_counts))
@@ -232,7 +222,6 @@ plotMDS(cluster_counts, labels=colnames(cluster_counts))
 
 
 ```{r}
-#hours <- c(0, 12, 120, 168, 24, 3, 36, 48, 48, 6, 72, 96)
 hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
 # X <- poly(hours, degree=3)
 # design <- model.matrix(~X)
@@ -273,7 +262,7 @@ fit <- glmQLFTest(fit, coef=2:4)
 ```{r}
 # Genes with most significant time effects
 tab <- as.data.frame(topTags(fit, n=100))
-tab
+head(tab)
 ```
 
 Change ENSEMBL gene IDs to gene symbols
@@ -282,7 +271,8 @@ Change ENSEMBL gene IDs to gene symbols
 library(org.Mm.eg.db)
 IDlist <- mapIds(org.Mm.eg.db, rownames(tab), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
 tab$Symbol <- IDlist
-tab
+tab$Symbol[which(is.na(tab$Symbol))] <- rownames(tab)[which(is.na(tab$Symbol))]
+head(tab)
 ```
 
 Multiple testing across genes and contrasts. The default threshold is p-value < 0.05. 
@@ -295,16 +285,123 @@ logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
 logCPM.fit <- cpm(fit, log=TRUE)
 ```
 
+
+# 3. Explore DE Genes
+
+Heatmap
+- explore clustering of the significant genes
+```{r}
+normalized_counts <- logCPM.obs
+
+# Extract normalized counts for only the significant genes
+sig_norm <- data.frame(normalized_counts) %>%
+  rownames_to_column(var = "gene") %>%
+  dplyr::filter(gene %in% rownames(tab)[1:30])
+
+colnames(sig_norm) <- c("gene", experiments)
+
+# Set up row names
+gene_symbol <- c()
+for (n in 1:length(sig_norm$gene)) {
+  gene_symbol[n] <- tab$Symbol[which(rownames(tab) == sig_norm$gene[n])]
+}
+
+rownames(sig_norm) <- gene_symbol
+
+# Set a color palette
+heat_colors <- brewer.pal(6, "YlOrRd")
+
+# Run pheatmap using the metadata for the annotation
+pheatmap(sig_norm[, 2:length(colnames(sig_norm))],
+         color = heat_colors,
+         cluster_rows = T,
+         cluster_cols = F, # Make this TRUE if you want to look cluster between different time points
+         show_rownames = T,
+         border_color = NA,
+         fontsize = 10,
+         scale = "row",
+         fontsize_row = 10,
+         height = 20,
+         main = paste0("Top DE gene clusters in ",cluster_OI))
+```
+
+
 ```{r}
 par(mfrow=c(2,2))
+interesting_genes <- c("Stil", "Asf1b", "Cenps", "Rad51ap1") #hepatocyte
+
+FlybaseID_list <- c()
 for(i in 1:4) {
-  FlybaseID <- row.names(tab)[i]
-  Symbol <- tab$Symbol[i]
+  FlybaseID <- row.names(tab)[which(tab$Symbol == interesting_genes[i])]
+  Symbol <- interesting_genes[i]
   logCPM.obs.i <- logCPM.obs[FlybaseID,]
   logCPM.fit.i <- logCPM.fit[FlybaseID,]
   plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
   lines(hours, logCPM.fit.i, col="red", lwd=2)
+  
+  FlybaseID_list[i] <- FlybaseID
 }
 ```
+
+```{r}
+FlybaseID_list
+```
+
+```{r}
+hepa_clusterOI <- subset(x = hepatectomy_expression, idents = cluster_OI)
+hepa_clusterOI@meta.data$time_experiment <- factor(hepa_clusterOI@meta.data$time_experiment, levels = experiments)
+```
+
+
+Violin Plot
+- visualize single cell expression distributions in each cluster
+```{r}
+for (ID in FlybaseID_list) {
+  print(VlnPlot(hepa_clusterOI, group.by = "time_experiment", features = ID, pt.size = 0))
+}
+```
+
+DotPlot
+- The size of the dot corresponds to the percentage of cells expressing the feature in each cluster. The color represents the average expression level.
+
+```{r}
+DotPlot(hepa_clusterOI, group.by = "time_experiment", features = FlybaseID_list) + RotatedAxis() + coord_flip() + theme(axis.text.y=element_text(size=7))
+```
+
+
+Plot interesting genes back in UMAP and Feature plot
+```{r}
+Plot_features <- function(gene) {
+
+  for (i in 1:12){
+    genename <- tab[gene,"Symbol"]
+    
+    dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
+    jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
+    
+    subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
+    highlight_cells <- Cells(subset)
+    dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
+  
+    feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
+    featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
+    
+    print(dimplot + featureplotwithtitle)
+    
+    dev.off()
+  }
+}
+```
+
+```{r}
+# for (ID in 1:length(FlybaseID_list)) {
+#   Plot_features(ID)
+# }
+```
+
+
+
+
+
 
 
