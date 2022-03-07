@@ -6,6 +6,7 @@ output: html_document
 ---
 
 Extension of *DE_EdgeR.Rmd*. Here, we will create aggregate matrix to observe change spanning over celltype rather than time point.
+https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
 
 ```{r}
 #install.packages('Matrix.utils')
@@ -26,6 +27,7 @@ library(purrr)
 library(Matrix.utils)
 library(RColorBrewer)
 library(pheatmap)
+library(cluster)
 ```
 
 ```{r}
@@ -174,7 +176,7 @@ table(sce$cluster_id, sce$time_experiment)
 ```
 
 # 2. Differential gene expression
-The aim is to examine the relationship between gene abundances and time points per each cell-type. Given enough number of time points, it is reasonable to assume smooth changes in gene expression. In this way, polynomial or a cubic spline curve can be used to model gene expression along time with a certain number of degrees of freedom.
+The aim is to examine the relationship between gene abundances and time points per each cell-type. In other words, we are looking for genes that change expression level over time in a time course experiment. Given enough number of time points, it is reasonable to assume smooth changes in gene expression. In this way, polynomial or a cubic spline curve can be used to model gene expression along time with a certain number of degrees of freedom.
 
 
 Perform DE analysis
@@ -200,7 +202,7 @@ hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
 Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
 ```{r}
 library(splines)
-X <- ns(hours, df = 5)
+X <- ns(hours, df = 4)
 design <- model.matrix(~X)
 design
 ```
@@ -209,9 +211,15 @@ Estimate dispersion. The negative binomial (NB) dispersion is estimated. This re
 y <- DGEList(counts = cluster_counts, group = hours)
 
 # filter out lowly expressed genes
-keep <- filterByExpr(y)
-y <- y[keep, , keep.lib.sizes = FALSE]
+#keep <- filterByExpr(y)
+#y <- y[keep, , keep.lib.sizes = FALSE]
 
+# TMM Normalisation
+#y <- calcNormFactors(y)
+#y$samples
+```
+
+```{r}
 y <- estimateDisp(y, design) # reduced from 134596 genes -> 92949 genes
 sqrt(y$common.dispersion)
 
@@ -228,20 +236,22 @@ plotQLDisp(fit)
 
 Fit a quasi-likelihood negative binomial generalized log-linear model to count data.
 ```{r}
-fit <- glmQLFTest(fit, coef=2:6)
+fit <- glmQLFTest(fit, coef=2:5)
 ```
 
-Multiple testing across genes and contrasts. The default threshold is p-value < 0.05. 
+Multiple testing across genes and contrasts. The total number of genes with significant (5% FDR) changes at different time points. 
+All spline coefficients are tested together. Thus t-tests for the individual coefficients and the logFC values do not have any interpretable meaning.
 ```{r}
 sig_num <- summary(decideTests(fit))
 sig_num
 # Before filtering: NotSig = 119186, Sig = 15410
 # After filtering: NotSig = 77693, Sig = 15256
 ```
-
+#NEW
 ```{r}
 # Genes with most significant time effects
-tab <- as.data.frame(topTags(fit, n=1498)) #15256
+tab <- as.data.frame(topTags(fit, n=90000)) %>% rownames_to_column(var = "gene")
+tab["order"] <- c(1:length(rownames(tab)))
 head(tab)
 ```
 
@@ -249,21 +259,37 @@ LogFC = log fold change, log difference between groups.
 LogCPM = log count per million, measure of expression level.
 
 ```{r}
-extract_geneID <- as.data.frame(str_split(rownames(tab), "[.]", simplify=TRUE))
+extract_geneID <- as.data.frame(str_split(tab$gene, "[.]", simplify=TRUE))
+tab$ENSEMBL <- extract_geneID$V1
+tab$celltype <- extract_geneID$V2
 ```
 
 Change ENSEMBL gene IDs to gene symbols
-```{r}
-library(org.Mm.eg.db)
-IDlist <- mapIds(org.Mm.eg.db, extract_geneID$V1, keytype="ENSEMBL", column="SYMBOL", multiVals="first")
-tab$Symbol <- IDlist
-tab$ENSEMBL <- extract_geneID$V1
-tab$celltype <- extract_geneID$V2
 
-tab$Symbol[which(is.na(tab$Symbol))] <- tab$ENSEMBL[which(is.na(tab$Symbol))] #fill in NA with ENSEMBL ID
+```{r}
+library(biomaRt)
+ensembl <- useEnsembl(biomart="ensembl", dataset = "mmusculus_gene_ensembl")
+IDtoSymbol_matrix <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), filters = "ensembl_gene_id", values = unique(extract_geneID$V1), mart = ensembl)
+```
+
+```{r}
+tab <- merge(tab, IDtoSymbol_matrix, by.x="ENSEMBL", by.y = "ensembl_gene_id", all.x=TRUE)
+colnames(tab)[length(colnames(tab))] <- "Symbol"
+
+# Fill rest of NA with ENSEMBL ID (ID no longer in the ENSEMBL database)
+tab$Symbol[which(is.na(tab$Symbol))] <- tab$ENSEMBL[which(is.na(tab$Symbol))]
+
+# New column with combination of gene symbol & celltype
 tab$Symbol_celltype <- paste0(tab$Symbol, "_", tab$celltype)
+
+tab <- tab %>% column_to_rownames(var = "gene")
+
+# reorder column and row
+tab <- tab[, c(2,3,4,5,6,7,8,9,10,11,1,12)]
+tab <- tab[order(tab$order),]
 head(tab)
 ```
+
 
 ```{r}
 #write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_Filter_5param.csv", sep = ",")
@@ -275,6 +301,11 @@ logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
 logCPM.fit <- cpm(fit, log=TRUE)
 ```
 
+```{r}
+#write.table(logCPM.obs, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs.csv", sep = ",")
+#write.table(logCPM.fit, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit.csv", sep = ",")
+
+```
 
 # 3. Examine significant genes
 ## 3-1. Cluster Analysis
@@ -290,33 +321,64 @@ sig_norm <- data.frame(normalized_counts) %>%
   dplyr::filter(gene %in% rownames(tab)[1:sig_num[2]])
 
 colnames(sig_norm) <- c("gene", experiments)
+sig_norm <- sig_norm %>% column_to_rownames(var="gene")
+head(sig_norm)
+```
 
 
-# Set up row names
-gene_symbol <- c()
-for (n in 1:length(sig_norm$gene)) {
-  gene_symbol[n] <- tab$Symbol_celltype[which(rownames(tab) == sig_norm$gene[n])]
+### Calculate distance
+```{r}
+library("amap")
+gene_dist <- Dist(sig_norm[, 1:length(colnames(sig_norm))], method="spearman")
+gene_hclust <- hclust(gene_dist, method = "ward.D2")
+```
+
+### Find the best cluster number k
+
+**Dendrogram**
+The height of the dendrogram indicates the order in which the clusters were joined. A more informative dendrogram can be created where the heights reflect the distance between the clusters.
+```{r}
+plot(gene_hclust, labels=FALSE, hang=-1)
+```
+
+
+**Silhouette coefficient**
+```{r}
+# Determine the best number of clusters
+sil_coef_vector <- c()
+for (num_cluster in 3:60){
+  sil_cutree <- cutree(gene_hclust, k = num_cluster)
+  sil_cl <- silhouette(sil_cutree ,gene_dist)
+  sil_cl_summary <- summary(sil_cl)
+  sil_coefficient <- as.vector(sil_cl_summary$si.summary["Mean"])
+  sil_coef_vector<- c(sil_coef_vector, sil_coefficient)
 }
+#summary(sil_cl)
 ```
 
 ```{r}
-# There are multiple Mup13 in gene name
-# ENSMUSG00000078675, ENSMUSG00000096688
-
-gene_symbol[duplicated(gene_symbol)]
-```
-```{r}
-rownames(sig_norm) <- sig_norm[,"gene"]
+plot(3:60,sil_coef_vector,"b", xlab="k", ylab="silhouette coefficient")
 ```
 
-### Calculate distance & cluster genes
+**C-index**
 ```{r}
-gene_dist <- dist(sig_norm[, 2:length(colnames(sig_norm))])
-gene_hclust <- hclust(gene_dist, method = "complete")
+# library("clusterSim")
+# # Determine the best number of clusters
+# c_index_vector <- c()
+# for (num_cluster in 3:20){
+#   c_cutree <- cutree(gene_hclust, k = num_cluster)
+#   c_cl <- index.C(gene_dist, c_cutree)
+#   c_index_vector<- c(c_index_vector, c_cl)
+# }
 ```
 
 ```{r}
-gene_cluster <- data.frame(cutree(gene_hclust, k = 50)) %>%
+#plot(3:20,c_index_vector,"b", xlab="k", ylab="C-index")
+```
+
+### Clustering
+```{r}
+gene_cluster <- data.frame(cutree(gene_hclust, k = 4)) %>%
   rownames_to_column()
 colnames(gene_cluster) <- c("gene", "cluster_number")
 head(gene_cluster)
@@ -324,22 +386,39 @@ head(gene_cluster)
 
 ### Plot clusters
 ```{r}
-par(mfrow=c(2,3))
+par(mfrow=c(2,2))
 
-for(i in 1:20) {
+histogram <- c()
+for(i in 1:4) {
   cluster_genes <- gene_cluster[gene_cluster$cluster_number == i, "gene"]
   logCPM.fit.i <- data.frame(logCPM.fit[cluster_genes,])
+  colnames(logCPM.fit.i) <- hours
+  histogram <- c(histogram, length(cluster_genes))
   
-  if (length(cluster_genes) > 1) {
-    plot(hours, logCPM.fit.i[1,], type = "l", ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"), pch=16)
-    for (j in 2:length(cluster_genes)) {
-      lines(hours, logCPM.fit.i[j,], lwd=2)
-    }
-  } else {
-    plot(hours, t(logCPM.fit.i), type = "l", ylab = "log_CPM", main=paste0("cluster ", i, ": 1 gene"), pch=16)
-  }
+  
+  # Commented line below shows trend lind of each genes
+  # plot(hours, logCPM.fit.i[1,], type = "l", ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"), pch=16)
+  # for (j in 2:10){#length(cluster_genes)) {
+  #    lines(hours, logCPM.fit.i[j,])
+  # }
+  
+  # Box plot of clusters through timepoint
+  box <- boxplot(logCPM.fit.i, ylim=c(-15, 15), ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"))
+  boxaverage <- box$stats[3,]
+  plot(hours, boxaverage, type="l", ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"), pch=16)
+  
 }
+
+
+#histogram <- as.dataframe(histogram)
 ```
+
+```{r}
+plot(histogram, type="h", lwd=10, ylim=c(0, 6000), xlab="Cluster", ylab="Cluster Size")
+text(histogram, format(histogram), pos=3, col="red", cex=0.8)
+```
+
+
 
 ### Save cluster number as csv
 ```{r}
@@ -460,65 +539,65 @@ Kif18b
 ## 3-4. Plot important individual genes
 
 ```{r}
-par(mfrow=c(2,3))
-#interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
-interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
-#interesting_genes <- c("Osm_neutrophil", "Il1r1_hepatocyte","Csf1_neutrophil", "Cxcl1_stellate")
-#interesting_genes <- c("Il6_kupffer", "Tnf_kupffer", "Csf1_stellate","Cxcl1_hepatocyte", "Insr_endothelial", "Bmp10_stellate")
-
-FlybaseID_list = c()
-for(i in 1:length(interesting_genes)) {
-  FlybaseID <- rownames(tab)[which(tab$Symbol_celltype == interesting_genes[i])]
-  Symbol <- interesting_genes[i]
-  logCPM.obs.i <- logCPM.obs[FlybaseID,]
-  logCPM.fit.i <- logCPM.fit[FlybaseID,]
-  plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
-  lines(hours, logCPM.fit.i, col="red", lwd=2)
-  FlybaseID_list[i] <- FlybaseID
-}
+# par(mfrow=c(2,3))
+# #interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+# #interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+# #interesting_genes <- c("Osm_neutrophil", "Il1r1_hepatocyte","Csf1_neutrophil", "Cxcl1_stellate")
+# interesting_genes <- c("Il6_kupffer", "Tnf_kupffer", "Csf1_stellate","Cxcl1_hepatocyte", "Insr_endothelial", "Bmp10_stellate")
+# 
+# FlybaseID_list = c()
+# for(i in 1:length(interesting_genes)) {
+#   FlybaseID <- rownames(tab)[which(tab$Symbol_celltype == interesting_genes[i])]
+#   Symbol <- interesting_genes[i]
+#   logCPM.obs.i <- logCPM.obs[FlybaseID,]
+#   logCPM.fit.i <- logCPM.fit[FlybaseID,]
+#   plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
+#   lines(hours, logCPM.fit.i, col="red", lwd=2)
+#   FlybaseID_list[i] <- FlybaseID
+# }
 ```
 
 ```{r}
-FlybaseID_list
+# FlybaseID_list
 ```
 
 ## 3-5. Violin Plot
 Violin Plot
 - visualize single cell expression distributions in each cluster
 ```{r}
-for (i in 1:length(FlybaseID_list)) {
-  feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
-  
-  hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
-  
-  print(VlnPlot(hepa_celltypeOI, group.by = "time_experiment", features = feature_OI[1], slot = "counts", pt.size = 0))
-}
+# for (i in 1:length(FlybaseID_list)) {
+#   feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
+#   
+#   hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
+#   
+#   print(VlnPlot(hepa_celltypeOI, group.by = "time_experiment", features = feature_OI[1], slot = "counts", pt.size = 0))
+# }
 ```
 
 ##3-6. UMAP & Feature Plot
 
 Plot interesting genes back in UMAP and Feature plot
 ```{r}
-Plot_features <- function(gene, cluster_OI) {
-
-  for (i in 1:12){
-    genename <- tab[which(rownames(tab) == paste0(gene, ".", cluster_OI)),"Symbol"]
-    
-    dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
-    jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
-    
-    subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
-    highlight_cells <- Cells(subset)
-    dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
-  
-    feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
-    featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
-    
-    print(dimplot + featureplotwithtitle)
-    
-    dev.off()
-  }
-}
+# Plot_features <- function(gene, cluster_OI) {
+# 
+#   for (i in 1:12){
+#     genename <- tab[which(rownames(tab) == paste0(gene, ".", cluster_OI)),"Symbol"]
+#     
+#     dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
+#     jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
+#     
+#     subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
+#     highlight_cells <- Cells(subset)
+#     dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
+#   
+#     feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
+#     featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
+#     
+#     print(dimplot + featureplotwithtitle)
+#     
+#     dev.off()
+#   }
+# }
 ```
 
 ```{r, message=FALSE}
