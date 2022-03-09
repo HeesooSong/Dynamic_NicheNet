@@ -187,11 +187,11 @@ cluster_counts$Symbol[which(cluster_counts$Symbol == "")] <- cluster_counts$ENSE
 
 rownames(cluster_counts) <- paste0(cluster_counts$Symbol, "_", cluster_counts$celltype)
 cluster_counts2 <- cluster_counts ####
-cluster_counts2 <- subset(cluster_counts2, select=-c(ENSEMBL, celltype, Symbol, order)) ####
+cluster_counts2 <- subset(cluster_counts2, select=-c(order, ENSEMBL, celltype, Symbol)) ####
 
 
 cluster_counts <- cluster_counts[order(cluster_counts$order),]
-cluster_counts <- subset(cluster_counts, select=-c(ENSEMBL, celltype, Symbol, order))
+cluster_counts <- subset(cluster_counts, select=-c(order, ENSEMBL, celltype, Symbol))
 
 head(cluster_counts)
 ```
@@ -215,37 +215,27 @@ library(edgeR)
 plotMDS(cluster_counts, labels=colnames(cluster_counts))
 ```
 
-```{r}
-hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
-PooledCounts <- sumTechReps(cluster_counts, ID = hours)
-PooledCounts2 <- sumTechReps(cluster_counts2, ID = hours)
-```
 
 ```{r}
-# hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
-# X <- poly(hours, degree=3)
-# design <- model.matrix(~X)
-# design
+hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
 ```
 
 Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
 ```{r}
 library(splines)
-X <- ns(unique(hours), df = 4)
-#X <- ns(hours, df = 4)
+X <- ns(hours, df = 4)
 design <- model.matrix(~X)
 design
 ```
 Estimate dispersion. The negative binomial (NB) dispersion is estimated. This returns the **DGEList** object with additional entries for the estimated NB dispersion for each gene.
 ```{r}
-y <- DGEList(counts = PooledCounts, group = unique(hours))
-y2 <- DGEList(counts = PooledCounts2, group = unique(hours))
-#y2 <- DGEList(counts = cluster_counts2, group = hours)
-#y <- DGEList(counts = cluster_counts, group = hours)
+y <- DGEList(counts = cluster_counts, group = hours)
+y2 <- DGEList(counts = cluster_counts2, group = hours)
+
 ```
 
 ```{r}
-# filter out lowly expressed genes
+# filter out lowly expressed genes. This solves(?) row order problem.
 keep <- filterByExpr(y)
 y <- y[keep, , keep.lib.sizes = FALSE]
 
@@ -255,22 +245,15 @@ y2 <- y2[keep2, , keep.lib.sizes = FALSE]
 # TMM Normalisation
 #y <- calcNormFactors(y)
 #y$samples
-
-#y2 <- calcNormFactors(y2)
 ```
 
-
-```{r}
-y2 <- estimateDisp(y2, design) # reduced from 134596 genes -> 92949 genes
-sqrt(y2$common.dispersion)
-
-# plot the tagwise dispersion against log2-CPM (counts per million)
-plotBCV(y2)
-```
 
 ```{r}
 y <- estimateDisp(y, design)
 sqrt(y$common.dispersion)
+
+y2 <- estimateDisp(y2, design)
+sqrt(y2$common.dispersion)
 
 # plot the tagwise dispersion against log2-CPM (counts per million)
 plotBCV(y)
@@ -278,68 +261,56 @@ plotBCV(y)
 
 
 Fit a quasi-likelihood NB generalized log-linear model
-```{r}
-fit2 <- glmQLFit(y2, design, robust=TRUE)
-plotQLDisp(fit2)
-```
 
 ```{r}
 fit <- glmQLFit(y, design, robust=TRUE)
+fit2 <- glmQLFit(y2, design, robust=TRUE)
 plotQLDisp(fit)
 ```
 
 Fit a quasi-likelihood negative binomial generalized log-linear model to count data.
 ```{r}
-fit2 <- glmQLFTest(fit2, coef=2:5)
 fit <- glmQLFTest(fit, coef=2:5)
+fit2 <- glmQLFTest(fit2, coef=2:5)
 ```
 
 Multiple testing across genes and contrasts. The total number of genes with significant (5% FDR) changes at different time points. 
 All spline coefficients are tested together. Thus t-tests for the individual coefficients and the logFC values do not have any interpretable meaning.
 
 ```{r}
+sig_num <- summary(decideTests(fit))
+sig_num
+
 sig_num2 <- summary(decideTests(fit2))
 sig_num2
 ```
 
 ```{r}
-sig_num <- summary(decideTests(fit))
-sig_num
-# Before filtering: NotSig = 119186, Sig = 15410
-# After filtering: NotSig = 77693, Sig = 15256
+# Genes with most significant time effects
+tab <- as.data.frame(topTags(fit, n=dim(fit)[1]))
+head(tab)
 ```
+
 ```{r}
 # Genes with most significant time effects
-tab2 <- as.data.frame(topTags(fit2, n=90000))
+tab2 <- as.data.frame(topTags(fit2, n=dim(fit)[1]))
 head(tab2)
 ```
 
 ```{r}
-# Genes with most significant time effects
-tab <- as.data.frame(topTags(fit, n=90000))
-head(tab)
+#write.table(tab, file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/tab.csv", sep = ",")
 ```
-```{r}
-all.equal(tab, tab2)
-colMeans(tab)
-colMeans(tab2)
-colMeans(tab) == colMeans(tab2)
-```
-
-
 
 LogFC = log fold change, log difference between groups.
 LogCPM = log count per million, measure of expression level.
 
 
 ```{r}
-#write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_Filter_5param.csv", sep = ",")
-```
+logCPM.obs <- edgeR::cpm(y, log=TRUE, prior.count=fit$prior.count)
+logCPM.fit <- edgeR::cpm(fit, log=TRUE)
 
-
-```{r}
-logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
-logCPM.fit <- cpm(fit, log=TRUE)
+logCPM.obs2 <- edgeR::cpm(y2, log=TRUE, prior.count=fit2$prior.count)
+logCPM.fit2 <- edgeR::cpm(fit2, log=TRUE)
 ```
 
 ```{r}
@@ -355,6 +326,7 @@ logCPM.fit <- cpm(fit, log=TRUE)
 ```{r}
 # Clustering based on fitted values
 normalized_counts <- logCPM.fit
+normalized_counts2 <- logCPM.fit2
 
 # Extract normalized counts for only the significant genes
 sig_norm <- data.frame(normalized_counts) %>%
@@ -364,15 +336,43 @@ sig_norm <- data.frame(normalized_counts) %>%
 colnames(sig_norm) <- c("gene", experiments)
 sig_norm <- sig_norm %>% column_to_rownames(var="gene")
 head(sig_norm)
+
+
+
+sig_norm2 <- data.frame(normalized_counts2) %>%
+  rownames_to_column(var = "gene") %>%
+  dplyr::filter(gene %in% rownames(tab2)[1:sig_num2[2]])
+
+colnames(sig_norm2) <- c("gene", experiments)
+sig_norm2 <- sig_norm2 %>% column_to_rownames(var="gene")
+head(sig_norm2)
+
+# only difference is the order of the genes.
+```
+```{r}
+alp_signorm <- sig_norm[order(row.names(sig_norm)),]
+alp_signorm2 <- sig_norm2[order(row.names(sig_norm2)),]
 ```
 
 
 ### Calculate distance
 ```{r}
 library("amap")
-gene_dist <- Dist(sig_norm[, 1:length(colnames(sig_norm))], method="spearman")
+gene_dist <- Dist(sig_norm, method="spearman")
 gene_hclust <- hclust(gene_dist, method = "ward.D2")
 ```
+
+```{r}
+gene_dist2 <- Dist(alp_signorm, method="spearman")
+gene_hclust2 <- hclust(gene_dist2, method = "ward.D2")
+```
+
+```{r}
+gene_dist3 <- Dist(alp_signorm2, method="spearman")
+gene_hclust3 <- hclust(gene_dist3, method = "ward.D2")
+```
+
+
 
 ### Find the best cluster number k
 
@@ -380,6 +380,8 @@ gene_hclust <- hclust(gene_dist, method = "ward.D2")
 The height of the dendrogram indicates the order in which the clusters were joined. A more informative dendrogram can be created where the heights reflect the distance between the clusters.
 ```{r}
 plot(gene_hclust, labels=FALSE, hang=-1)
+plot(gene_hclust2, labels=FALSE, hang=-1)
+plot(gene_hclust3, labels=FALSE, hang=-1)
 ```
 
 
@@ -425,6 +427,16 @@ colnames(gene_cluster) <- c("gene", "cluster_number")
 head(gene_cluster)
 ```
 
+```{r}
+gene_cluster2 <- data.frame(cutree(gene_hclust2, k = 4)) %>%
+  rownames_to_column()
+colnames(gene_cluster2) <- c("gene", "cluster_number")
+
+gene_cluster3 <- data.frame(cutree(gene_hclust3, k = 4)) %>%
+  rownames_to_column()
+colnames(gene_cluster3) <- c("gene", "cluster_number")
+```
+
 ### Plot clusters
 ```{r}
 par(mfrow=c(2,2))
@@ -453,22 +465,44 @@ for(i in 1:4) {
 
 #histogram <- as.dataframe(histogram)
 ```
+```{r}
+histogram2 <- c()
+for(i in 1:4) {
+  cluster_genes2 <- gene_cluster2[gene_cluster2$cluster_number == i, "gene"]
+  histogram2 <- c(histogram2, length(cluster_genes2))
+}
+
+histogram3 <- c()
+for(i in 1:4) {
+  cluster_genes3 <- gene_cluster3[gene_cluster3$cluster_number == i, "gene"]
+  histogram3 <- c(histogram3, length(cluster_genes3))
+}
+
+```
 
 ```{r}
 plot(histogram, type="h", lwd=10, ylim=c(0, 6000), xlab="Cluster", ylab="Cluster Size")
 text(histogram, format(histogram), pos=3, col="red", cex=0.8)
-```
 
+plot(histogram2, type="h", lwd=10, ylim=c(0, 6000), xlab="Cluster", ylab="Cluster Size")
+text(histogram2, format(histogram2), pos=3, col="red", cex=0.8)
+
+plot(histogram3, type="h", lwd=10, ylim=c(0, 6000), xlab="Cluster", ylab="Cluster Size")
+text(histogram3, format(histogram3), pos=3, col="red", cex=0.8)
+```
 
 
 ### Save cluster number as csv
 ```{r}
 cluster_number_merged <- merge(x = tab[1:sig_num[2],], y = gene_cluster, by.x = 0 , by.y = "gene", all = TRUE)
+
+cluster_number_merged2 <- merge(x = tab[1:sig_num[2],], y = gene_cluster2, by.x = 0 , by.y = "gene", all = TRUE)
 head(cluster_number_merged)
 ```
 
 ```{r}
 #write.table(cluster_number_merged, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster.csv", sep = ",")
+#write.table(cluster_number_merged2, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_difforder.csv", sep = ",")
 ```
 
 ## 3-2. Common genes across cell types
