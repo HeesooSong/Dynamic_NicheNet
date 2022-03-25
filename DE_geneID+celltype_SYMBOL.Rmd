@@ -293,9 +293,14 @@ head(tab)
 
 ```{r}
 # Genes with most significant time effects
-tab2 <- as.data.frame(topTags(fit2, n=dim(fit)[1]))
+tab2 <- as.data.frame(topTags(fit2, n=dim(fit2)[1]))
 head(tab2)
 ```
+
+```{r}
+all.equal(tab, tab2)
+```
+
 
 ```{r}
 #write.table(tab, file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/tab.csv", sep = ",")
