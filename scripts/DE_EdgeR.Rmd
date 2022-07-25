@@ -1,0 +1,407 @@
+---
+title: "DE_EdgeR"
+author: "Heesoo Song"
+date: '2021 11 28 '
+output: html_document
+---
+
+This analysis is based on two tutorials:
+  - https://hbctraining.github.io/scRNA-seq_online/lessons/pseudobulk_DESeq2_scrnaseq.html
+  - https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+  
+The first tutorial gave idea about making aggregate matrix as an alternative of using Muscat. Muscat unfortunately kept rised errors. Although this tutorial was a bit manual, but created what Muscat does with aggregateData() function.
+
+The second tutorial is about the analysis of time course data using EdgeR. 
+
+```{r, message = FALSE}
+library(SeuratObject)
+library(Seurat)
+library(nichenetr)
+library(tidyverse)
+library("ggplot2")
+library(muscat)
+library(pheatmap)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(purrr)
+```
+
+```{r}
+# Load processed expression data of interacting cells
+hepatectomy_expression <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+
+# Total 91021 cells, with 5000 genes
+```
+
+```{r}
+celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+```
+
+```{r}
+hepa_celltypeOI <- subset(x = hepatectomy_expression, idents = celltype_OI)
+
+experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+
+hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
+```
+
+# Create Aggregate Count Matrix
+
+```{r}
+# Extract raw counts and metadata to create SingleCellExperiment object
+counts <- hepa_celltypeOI@assays$RNA@counts
+metadata <- hepa_celltypeOI@meta.data
+
+# Set up metadata as desired for aggregation and DE analysis
+metadata$cluster_id <- factor(hepa_celltypeOI@active.ident)
+
+# Create single cell experiment object
+sce <- SingleCellExperiment(assays = list(counts = counts),
+                            colData = metadata)
+
+```
+
+
+```{r}
+#Named vector of cluster names
+kids <- purrr::set_names(levels(sce$cluster_id))
+kids
+
+#Total number of clusters
+nk <- length(kids)
+nk
+
+#Named vector of sample names
+sids <- purrr::set_names(levels(factor(sce$time_experiment)))
+sids[1:10]
+
+#Total number of samples
+ns <- length(sids)
+ns
+```
+```{r}
+# Generate sample level metadata
+
+## Determine the number of cells per sample
+table(sce$time_experiment)
+#table(sce$cluster_sample)
+
+## Turn named vector into a numeric vector of cells per sample
+n_cells <- as.numeric(table(sce$time_experiment))
+#n_cells <- as.numeric(table(sce$cluster_sample))
+
+## Determine how to reorder the samples (rows) of the metadata to match the order of sample names in sids vector
+m <- match(sids, sce$time_experiment)
+#m <- match(sids, sce$cluster_sample)
+
+```
+```{r}
+# Identify groups for aggregation of counts
+groups <- colData(sce)[, c("cluster_id", "time_experiment")]
+#groups <- colData(sce)[, c("cluster_id", "cluster_sample")]
+```
+
+
+
+```{r}
+#install.packages('Matrix.utils')
+library(Matrix.utils)
+pb <- aggregate.Matrix(t(counts(sce)),
+                       groupings = groups, fun = "sum")
+
+class(pb)
+dim(pb)
+pb[1:6, 1:6]
+```
+
+```{r}
+# Not every cluster is present in all samples; create a vector that represents how to split samples
+# But actually we do have all cell types! :) Maybe skip this step
+splitf <- sapply(stringr::str_split(rownames(pb), pattern="_", n=2), '[', 1)
+```
+
+```{r}
+# Turn into a list and split the list into components for each cluster and transform, so rows are genes and columns are samples and make rownames as the sample IDs
+library(magrittr)
+pb <- split.data.frame(pb, 
+                       factor(splitf)) %>%
+  lapply(function(u) 
+    set_colnames(t(u), 
+                 stringr::str_extract(rownames(u), "(?<=_)[:alnum:]+_phase_[0-9]")))
+
+```
+```{r}
+# Print out the table of cells in each cluster-sample group
+options(width = 100)
+table(sce$cluster_id, sce$time_experiment)
+#table(sce$cluster_id, sce$cluster_sample)
+```
+
+# 2. Differential gene expression
+The aim is to examine the relationship between gene abundances and time points per each cell-type. Given enough number of time points, it is reasonable to assume smooth changes in gene expression. In this way, polynomial or a cubic spline curve can be used to model gene expression along time with a certain number of degrees of freedom.
+
+First, prepare matrix for DE analysis.
+```{r}
+# Get sample names for each of the cell type clusters
+
+# prep. data.frame for plotting
+get_sample_ids <- function(x){
+  pb[[x]] %>%
+    colnames()
+}
+
+de_samples <- map(1:length(kids), get_sample_ids) %>%
+  unlist()
+```
+
+```{r}
+# Get cluster IDs for each of the samples
+
+samples_list <- map(1:length(kids), get_sample_ids)
+
+get_cluster_ids <- function(x){
+  rep(names(pb)[x], 
+      each = length(samples_list[[x]]))
+}
+
+de_cluster_ids <- map(1:length(kids), get_cluster_ids) %>%
+  unlist()
+```
+
+```{r}
+# Create a data frame with the sample IDs, cluster IDs and condition
+
+gg_df <- data.frame(cluster_id = de_cluster_ids,
+                    sample_id = de_samples)
+
+
+metadata <- gg_df %>%
+  dplyr::select(cluster_id, sample_id)
+
+metadata$cluster_id <- factor(metadata$cluster_id)
+#metadata$cluster_sample <- paste0(factor(metadata$cluster_id), ".", factor(metadata$sample_id)) # This line is added
+
+head(metadata, n = 10)
+```
+
+
+Perform DE analysis on each cell type.
+clusters = c("cholangiocyte", "endothelial", "hepatocyte", "kupffer", "monocyte", "neutrophil", "stellate")
+```{r}
+# Subset dataset to cluster of interest
+
+## Generate vector of cluster IDs
+clusters <- levels(metadata$cluster_id)
+clusters
+
+cluster_OI <- clusters[3]
+
+## DE analysis on cholangiocyte
+### Subset the metadata to only
+cluster_metadata <- metadata[which(metadata$cluster_id == cluster_OI), ]
+head(cluster_metadata)
+
+### Assign the rownames of the metadata to be the sample IDs
+rownames(cluster_metadata) <- cluster_metadata$sample_id
+cluster_metadata
+
+### Subset the counts to only the B cells
+counts <- pb[[cluster_OI]]
+
+cluster_counts <- as.data.frame(as.matrix(counts[, which(colnames(counts) %in% rownames(cluster_metadata))]))
+
+### Check that all of the row names of the metadata are the same and in the same order as the column names of the counts
+all(rownames(cluster_metadata) == colnames(cluster_counts))
+```
+
+Explore aggregated count data by MDS (multi-dimensional scaling) plots. This visualizes the differences between the expression profiles of different samples (cholangiocyte) in two dimensions.
+```{r}
+library(edgeR)
+plotMDS(cluster_counts, labels=colnames(cluster_counts))
+```
+
+
+```{r}
+hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+# X <- poly(hours, degree=3)
+# design <- model.matrix(~X)
+# design
+```
+
+Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
+```{r}
+library(splines)
+X <- ns(hours, df = 3)
+design <- model.matrix(~X)
+design
+```
+Estimate dispersion. The negative binomial (NB) dispersion is estimated. This returns the **DGEList** object with additional entries for the estimated NB dispersion for each gene.
+```{r}
+y <- DGEList(counts = cluster_counts, group = hours)
+y <- estimateDisp(y, design)
+sqrt(y$common.dispersion)
+
+# plot the tagwise dispersion against log2-CPM (counts per million)
+plotBCV(y)
+```
+```{r}
+#install.packages("statmod")
+```
+
+Fit a quasi-likelihood NB generalized log-linear model
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+```
+
+Fit a quasi-likelihood negative binomial generalized log-linear model to count data.
+```{r}
+fit <- glmQLFTest(fit, coef=2:4)
+```
+
+```{r}
+# Genes with most significant time effects
+tab <- as.data.frame(topTags(fit, n=100))
+head(tab)
+```
+
+Change ENSEMBL gene IDs to gene symbols
+```{r}
+#BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db)
+IDlist <- mapIds(org.Mm.eg.db, rownames(tab), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+tab$Symbol <- IDlist
+tab$Symbol[which(is.na(tab$Symbol))] <- rownames(tab)[which(is.na(tab$Symbol))]
+head(tab)
+```
+
+Multiple testing across genes and contrasts. The default threshold is p-value < 0.05. 
+```{r}
+summary(decideTests(fit))
+```
+
+```{r}
+logCPM.obs <- cpm(y, log=TRUE, prior.count=fit$prior.count)
+logCPM.fit <- cpm(fit, log=TRUE)
+```
+
+
+# 3. Explore DE Genes
+
+Heatmap
+- explore clustering of the significant genes
+```{r}
+normalized_counts <- logCPM.obs
+
+# Extract normalized counts for only the significant genes
+sig_norm <- data.frame(normalized_counts) %>%
+  rownames_to_column(var = "gene") %>%
+  dplyr::filter(gene %in% rownames(tab)[1:30])
+
+colnames(sig_norm) <- c("gene", experiments)
+
+# Set up row names
+gene_symbol <- c()
+for (n in 1:length(sig_norm$gene)) {
+  gene_symbol[n] <- tab$Symbol[which(rownames(tab) == sig_norm$gene[n])]
+}
+
+rownames(sig_norm) <- gene_symbol
+
+# Set a color palette
+heat_colors <- brewer.pal(6, "YlOrRd")
+
+# Run pheatmap using the metadata for the annotation
+pheatmap(sig_norm[, 2:length(colnames(sig_norm))],
+         color = heat_colors,
+         cluster_rows = T,
+         cluster_cols = F, # Make this TRUE if you want to look cluster between different time points
+         show_rownames = T,
+         border_color = NA,
+         fontsize = 10,
+         scale = "row",
+         fontsize_row = 10,
+         height = 20,
+         main = paste0("Top DE gene clusters in ",cluster_OI))
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+interesting_genes <- c("Stil", "Asf1b", "Cenps", "Rad51ap1") #hepatocyte
+
+FlybaseID_list <- c()
+for(i in 1:4) {
+  FlybaseID <- row.names(tab)[which(tab$Symbol == interesting_genes[i])]
+  Symbol <- interesting_genes[i]
+  logCPM.obs.i <- logCPM.obs[FlybaseID,]
+  logCPM.fit.i <- logCPM.fit[FlybaseID,]
+  plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
+  lines(hours, logCPM.fit.i, col="red", lwd=2)
+  
+  FlybaseID_list[i] <- FlybaseID
+}
+```
+
+```{r}
+FlybaseID_list
+```
+
+```{r}
+hepa_clusterOI <- subset(x = hepatectomy_expression, idents = cluster_OI)
+hepa_clusterOI@meta.data$time_experiment <- factor(hepa_clusterOI@meta.data$time_experiment, levels = experiments)
+```
+
+
+Violin Plot
+- visualize single cell expression distributions in each cluster
+```{r}
+for (ID in FlybaseID_list) {
+  print(VlnPlot(hepa_clusterOI, group.by = "time_experiment", features = ID, pt.size = 0))
+}
+```
+
+DotPlot
+- The size of the dot corresponds to the percentage of cells expressing the feature in each cluster. The color represents the average expression level.
+
+```{r}
+DotPlot(hepa_clusterOI, group.by = "time_experiment", features = FlybaseID_list) + RotatedAxis() + coord_flip() + theme(axis.text.y=element_text(size=7))
+```
+
+
+Plot interesting genes back in UMAP and Feature plot
+```{r}
+Plot_features <- function(gene) {
+
+  for (i in 1:12){
+    genename <- tab[gene,"Symbol"]
+    
+    dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
+    jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
+    
+    subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
+    highlight_cells <- Cells(subset)
+    dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
+  
+    feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
+    featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
+    
+    print(dimplot + featureplotwithtitle)
+    
+    dev.off()
+  }
+}
+```
+
+```{r}
+# for (ID in 1:length(FlybaseID_list)) {
+#   Plot_features(ID)
+# }
+```
+
+
+
+
+
+
+

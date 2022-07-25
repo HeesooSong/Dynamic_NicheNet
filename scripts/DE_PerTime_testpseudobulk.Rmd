@@ -1,0 +1,236 @@
+---
+title: "DE_PerTime"
+author: "Heesoo Song"
+date: '2022 6 15 '
+output: html_document
+---
+
+```{r, message = FALSE}
+library(SeuratObject)
+library(Seurat)
+library(nichenetr)
+library(tidyverse)
+library(ggplot2)
+library(edgeR)
+library(rmarkdown)
+library(SingleCellExperiment)
+library(DEsingle)
+library(Matrix.utils)
+```
+
+# 0. Load Dataset
+```{r}
+IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
+```
+
+```{r}
+# Load processed expression data of interacting cells
+hepatectomy_expression = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+```
+
+```{r}
+celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+
+# experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+experiments <- c("3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+
+#hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+hours <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+```
+
+```{r}
+hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
+
+hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
+```
+
+```{r}
+rm(hepatectomy_expression)
+```
+
+## 0-1. Change ENSEMBL to gene symbols
+```{r}
+tp1 <- "3_phase_2"
+tp2 <- "6_phase_2"
+
+hepa_timeOI <- subset(x = hepa_celltypeOI, subset = time_experiment %in% c(tp1, tp2))
+
+sce <- as.SingleCellExperiment(hepa_timeOI)
+```
+
+```{r}
+counts(sce)[1:6,1:4]
+```
+
+```{r}
+## change ENSEMBL to gene symbol in column names
+
+# library(biomaRt)
+# ensembl <- useEnsembl(biomart="ensembl", dataset = "mmusculus_gene_ensembl")
+# IDtoSymbol_matrix <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), filters = "ensembl_gene_id", values = unique(colnames(expression_tp1)), mart = ensembl)
+
+IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
+
+head(IDtoSymbol_matrix)
+```
+
+```{r}
+rownames_sce <- data.frame("ENSEMBL" = rownames(sce))
+rownames_sce["order"] <- c(1:dim(rownames_sce)[1])
+gene_ID <- merge(rownames_sce, IDtoSymbol_matrix, by.x="ENSEMBL", by.y = "ensembl_gene_id", all.x=TRUE)
+
+# Fill rest of NA with ENSEMBL ID (ID no longer in the ENSEMBL database)
+gene_ID$external_gene_name[which(gene_ID$external_gene_name == "")] <- gene_ID$ENSEMBL[which(gene_ID$external_gene_name == "")]
+gene_ID$external_gene_name[which(is.na(gene_ID$external_gene_name))] <- gene_ID$ENSEMBL[which(is.na(gene_ID$external_gene_name))]
+gene_ID <- gene_ID[order(gene_ID$order),]
+
+# Change rownames of SCE
+rownames(sce) <- gene_ID$external_gene_name
+
+counts(sce)[1:6,1:4]
+```
+
+# 1. DE analysis (DEsingle)
+
+```{r}
+library(tictoc)
+```
+
+## 1-1. DEsingle
+```{r}
+#group <- factor(sce$time_experiment)
+
+# library(BiocParallel)
+# param <- SnowParam(workers = 8, type = "SOCK", progressbar = TRUE)
+# register(param)
+# 
+# tic("DEsingle")
+# results <- DEsingle(counts = sce, group = group, parallel = TRUE, BPPARAM = param)
+# toc()
+# 
+# results.classified <- DEtype(results = results, threshold = 0.05)
+```
+
+## 1-2. EdgeR (Pseudobulk)
+If we make a pseudobulk per cell type cluster, it will end up with high false positive rate. Effect size (logFC)/ SE (standard error) when calculating p-values. However in logFC, pseudobulk 
+```{r}
+# # Create aggregate matrix
+# group <- colData(sce)[, c("ident", "time_experiment")]
+# 
+# pb <- aggregate.Matrix(t(counts(sce)),
+#                        groupings = group, fun = "sum")
+# 
+# 
+# dim(pb)
+# pb[1:5, 1:6]
+```
+
+```{r}
+# y <- DGEList(counts = t(pb))
+```
+
+```{r}
+# # filter out lowly expressed genes
+# keep <- filterByExpr(y)
+# y <- y[keep, , keep.lib.sizes = FALSE]
+# 
+# # TMM Normalisation
+# y <- calcNormFactors(y)
+# y$samples
+```
+```{r}
+# plotMDS(y)
+```
+
+```{r}
+# timepoint <- factor(sapply(stringr::str_split(rownames(pb), pattern="_", n=2), '[', 2))
+# cluster <- factor(sapply(stringr::str_split(rownames(pb), pattern="_", n=2), '[', 1))
+# 
+# design <- model.matrix(~timepoint+cluster)
+# design
+```
+
+```{r}
+# y <- estimateDisp(y, design)
+# sqrt(y$common.dispersion)
+# 
+# # plot the tagwise dispersion against log2-CPM (counts per million)
+# plotBCV(y)
+```
+
+```{r}
+# fit <- glmFit(y, design, robust=TRUE)
+```
+
+```{r}
+# lrt <- glmLRT(fit, coef = 2)
+# topTags(lrt)
+```
+
+```{r}
+# o <- order(lrt$table$PValue)
+# y$counts[o[1:10],1:4]
+# # Differences between tp1 vs. tp2 can be observed in each cell type
+```
+
+The total number of differentially expressed genes at 5% FDR
+```{r}
+# sig_num <- summary(decideTests(lrt))
+# sig_num
+```
+
+```{r}
+# plotMD(lrt)
+# abline(h=c(-1, 1), col="blue") # Indicates 2 fold changes
+```
+
+```{r}
+# go <- goana(lrt)
+# topGO(go, ont="BP", sort="Up", n=30, truncate=30)
+# Error in goana.default(de = DEGenes, universe = universe, ...) : No annotated genes found in universe
+```
+
+```{r}
+# Genes with most significant time effects
+# H0: no trend/pattern in expression level over time
+# tab <- as.data.frame(topTags(lrt, n=dim(lrt)[1]))
+# head(tab)
+```
+
+```{r}
+# logCPM.obs <- edgeR::cpm(y, log=TRUE, prior.count=lrt$prior.count)
+# logCPM.fit <- edgeR::cpm(lrt, log=TRUE)
+```
+
+```{r}
+# write.table(logCPM.obs, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv", sep = ",")
+# write.table(logCPM.fit, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_DecontX.csv", sep = ",")
+
+```
+
+## 1-3. Seurat FindMarkers
+
+Compare differentially expressed genes between two timepoints in a cell type.
+adjusted p=1 means inability to reject the null at any significance level; in intuitive terms, this means ``no evidence against the null''
+```{r}
+DE_list <- list()
+for (celltype in celltype_OI){
+  onecelltype_seurat <- subset(hepa_timeOI, idents = celltype)
+  DE_genes <- FindMarkers(onecelltype_seurat, ident.1 = tp2, ident.2 = tp1, group.by = "time_experiment", logfc.threshold = 0.5)
+  
+  # add gene symbol
+  DE_genes <- merge(DE_genes, IDtoSymbol_matrix, by.x = 0, by.y = "ensembl_gene_id", all.x = TRUE) %>% column_to_rownames("Row.names")
+  DE_genes <- DE_genes[DE_genes$external_gene_name != "",]
+  DE_genes <- DE_genes[!is.na(DE_genes$external_gene_name),]
+  DE_genes <- DE_genes[DE_genes$p_val_adj < 0.5,] # remove adjusted p-value < 0.5
+  DE_genes <- DE_genes[order(DE_genes$p_val),]
+  
+  # add to list
+  DE_list[[celltype]] <- DE_genes
+}
+```
+
+# 2. 
+
+
+

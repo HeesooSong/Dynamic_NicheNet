@@ -1,0 +1,84 @@
+---
+title: "Evaluate_48h_phase1"
+author: "Heesoo Song"
+date: '2022 3 28 '
+output: html_document
+---
+
+```{r}
+siggenes_no48h <- read.csv(file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sig_genes_no48h-1.csv", sep = ",")
+siggenes_no48h_2 <- read.csv(file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sig_genes_no48h-2.csv", sep = ",")
+siggenes <- read.csv(file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sig_genes.csv", sep = ",")
+
+siggenes_no48h <- siggenes_no48h$x
+siggenes_no48h_2 <- siggenes_no48h_2$x
+siggenes <- siggenes$x
+```
+
+```{r}
+siggenes[1:10]
+siggenes_no48h[1:10]
+```
+
+# both vs. only 48h_2
+```{r}
+disappeared_genes <- setdiff(siggenes, siggenes_no48h)
+```
+
+```{r}
+new_genes <- setdiff(siggenes_no48h, siggenes)
+```
+
+```{r}
+length(intersect(siggenes, siggenes_no48h))
+```
+
+# both vs. only 48_1
+```{r}
+length(setdiff(siggenes, siggenes_no48h_2))
+```
+
+```{r}
+length(setdiff(siggenes_no48h_2, siggenes))
+```
+
+```{r}
+length(intersect(siggenes, siggenes_no48h_2))
+```
+
+
+```{r}
+logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs.csv")
+logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit.csv")
+```
+
+```{r}
+plot_trend <- function(interesting_genes){
+  par(mfrow=c(2,3))
+  
+  for(gene in interesting_genes) {
+    gene_celltype <- gene
+    logCPM.obs.i <- logCPM.obs[gene_celltype,]
+    logCPM.fit.i <- logCPM.fit[gene_celltype,]
+    plot(hours, logCPM.obs.i, ylab="log-CPM", main=gene_celltype, pch=16)
+    lines(hours, logCPM.fit.i, col="red", lwd=2)
+  }
+}
+```
+
+```{r}
+plot_trend(disappeared_genes[1:12])
+```
+
+```{r}
+tab = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/tab.csv")
+tab["rank"] <- c(1:dim(tab)[1])
+```
+
+```{r}
+disappeared_genes_stat <- tab[which(rownames(tab) %in% disappeared_genes),]
+disappeared_genes_stat
+```
+
+
+

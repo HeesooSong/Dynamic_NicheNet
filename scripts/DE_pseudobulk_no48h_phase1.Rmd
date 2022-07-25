@@ -1,9 +1,11 @@
 ---
-title: "DE_pseudobulk"
+title: "DE_geneID+celltype_excl48Phase1"
 author: "Heesoo Song"
-date: '2021 12 1 '
+date: '2022 1 11 '
 output: html_document
 ---
+
+Here, we try psuedobulk analysis excluding the timepoint 48h_phase1 as this has high difference in gene expression level with 48h_phase2. This may be hindering the correct fitting of the model. The difference of features in 48h_phase1 and 48h_phase2 can be seen in MDS plot of *DE_geneID+celltype.Rmd*. 
 
 Extension of *DE_EdgeR.Rmd*. Here, we will create aggregate matrix to observe change spanning over celltype rather than time point.
 https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
@@ -27,7 +29,6 @@ library(purrr)
 library(Matrix.utils)
 library(RColorBrewer)
 library(pheatmap)
-library(cluster)
 ```
 
 ```{r}
@@ -39,11 +40,12 @@ hepatectomy_expression = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_Nic
 
 ```{r}
 celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
-experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
 ```
 
 ```{r}
 hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
+hepa_celltypeOI = subset(x = hepa_celltypeOI, subset = time_experiment %in% experiments)
 
 hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
 ```
@@ -167,6 +169,7 @@ dim(pb_combined)
 cluster_counts <- as.data.frame(as.matrix(pb_combined))
 ```
 
+
 ```{r}
 extract_geneID <- as.data.frame(str_split(rownames(cluster_counts), "[.]", simplify=TRUE))
 cluster_counts$ENSEMBL <- extract_geneID$V1
@@ -210,7 +213,7 @@ plotMDS(cluster_counts, labels=colnames(cluster_counts))
 
 
 ```{r}
-hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+hours <- c(0, 3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
 ```
 
 Use cubic regression spline curve with 3 degrees of freedom. The advantage of using a cubic spline curve is that it provides more stable fit at the end points compared to a polynomial. The spline curve with 3 degrees of freedom has 2 knots where cucbic polynomicals are splined together.
@@ -271,10 +274,6 @@ tab <- as.data.frame(topTags(fit, n=dim(fit)[1]))
 head(tab)
 ```
 
-```{r}
-#write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/tab.csv", sep = ",")
-```
-
 
 LogFC = log fold change, log difference between groups.
 LogCPM = log count per million, measure of expression level.
@@ -308,9 +307,11 @@ colnames(sig_norm) <- c("gene", experiments)
 sig_norm <- sig_norm %>% column_to_rownames(var="gene")
 head(sig_norm)
 ```
+
 ```{r}
-#write.table(rownames(sig_norm), file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sig_genes.csv", sep = ",")
+#write.table(rownames(sig_norm), file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sig_genes_no48h-2.csv", sep = ",")
 ```
+
 
 ### Calculate distance
 ```{r}
@@ -401,16 +402,33 @@ for(i in 1:3) {
 #histogram <- as.dataframe(histogram)
 ```
 
+```{r}
+# par(mfrow=c(2,3))
+# 
+# for(i in 1:20) {
+#   cluster_genes <- gene_cluster[gene_cluster$cluster_number == i, "gene"]
+#   logCPM.fit.i <- data.frame(logCPM.fit[cluster_genes,])
+#   
+#   if (length(cluster_genes) > 1) {
+#     plot(hours, logCPM.fit.i[1,], type = "l", ylab="log-CPM", main=paste0("cluster ", i, ": ", length(cluster_genes), " genes"), pch=16)
+#     for (j in 2:length(cluster_genes)) {
+#       lines(hours, logCPM.fit.i[j,], lwd=2)
+#     }
+#   } else {
+#     plot(hours, t(logCPM.fit.i), type = "l", ylab = "log_CPM", main=paste0("cluster ", i, ": 1 gene"), pch=16)
+#   }
+# }
+```
 
 ```{r}
 plot(histogram, type="h", lwd=10, ylim=c(0, 6000), xlab="Cluster", ylab="Cluster Size")
 text(histogram, format(histogram), pos=3, col="red", cex=0.8)
 ```
 
-
 ### Save cluster number as csv
 ```{r}
 cluster_number_merged <- merge(x = tab[1:sig_num[2],], y = gene_cluster, by.x = 0 , by.y = "gene", all = TRUE)
+head(cluster_number_merged)
 ```
 
 ```{r}
@@ -443,6 +461,10 @@ for (n in 1:dim(common_genes)[1]) {
 common_genes["symbol"] <- gene_symbol
 
 head(common_genes)
+```
+
+```{r}
+#write.table(common_genes, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Dynamic_NicheNet/DE_pseudobulk_commonGenes.csv", sep = ",")
 ```
 
 ```{r}
@@ -522,65 +544,67 @@ Kif18b
 ## 3-4. Plot important individual genes
 
 ```{r}
-# par(mfrow=c(2,3))
-# #interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
-# #interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
-# #interesting_genes <- c("Osm_neutrophil", "Il1r1_hepatocyte","Csf1_neutrophil", "Cxcl1_stellate")
-# interesting_genes <- c("Il6_kupffer", "Tnf_kupffer", "Csf1_stellate","Cxcl1_hepatocyte", "Insr_endothelial", "Bmp10_stellate")
-# 
-# FlybaseID_list = c()
-# for(i in 1:length(interesting_genes)) {
-#   FlybaseID <- rownames(tab)[which(tab$Symbol_celltype == interesting_genes[i])]
-#   Symbol <- interesting_genes[i]
-#   logCPM.obs.i <- logCPM.obs[FlybaseID,]
-#   logCPM.fit.i <- logCPM.fit[FlybaseID,]
-#   plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
-#   lines(hours, logCPM.fit.i, col="red", lwd=2)
-#   FlybaseID_list[i] <- FlybaseID
-# }
+par(mfrow=c(2,3))
+#interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+#interesting_genes <- c("Dlgap5_endothelial", "Plk1_endothelial", "Knstrn_endothelial", "Cdc20_endothelial", "Kif18b_endothelial")
+#interesting_genes <- c("Osm_neutrophil", "Il1r1_hepatocyte","Csf1_neutrophil", "Cxcl1_stellate")
+interesting_genes <- c("Il6_kupffer", "Tnf_kupffer", "Csf1_stellate","Cxcl1_hepatocyte", "Insr_endothelial", "Bmp10_stellate")
+
+FlybaseID_list = c()
+for(i in 1:length(interesting_genes)) {
+  FlybaseID <- rownames(tab)[which(tab$Symbol_celltype == interesting_genes[i])]
+  Symbol <- interesting_genes[i]
+  logCPM.obs.i <- logCPM.obs[FlybaseID,]
+  logCPM.fit.i <- logCPM.fit[FlybaseID,]
+  plot(hours, logCPM.obs.i, ylab="log-CPM", main=Symbol, pch=16)
+  lines(hours, logCPM.fit.i, col="red", lwd=2)
+  FlybaseID_list[i] <- FlybaseID
+}
 ```
 
 ```{r}
-# FlybaseID_list
+FlybaseID_list
 ```
 
 ## 3-5. Violin Plot
 Violin Plot
 - visualize single cell expression distributions in each cluster
 ```{r}
-# for (i in 1:length(FlybaseID_list)) {
-#   feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
-#   
-#   hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
-#   
-#   print(VlnPlot(hepa_celltypeOI, group.by = "time_experiment", features = feature_OI[1], slot = "counts", pt.size = 0))
-# }
+for (i in 1:length(FlybaseID_list)) {
+  feature_OI <- str_split(FlybaseID_list[i], "[.]") %>% unlist()
+  
+  hepa_clusterOI <- subset(x = hepa_celltypeOI, idents = feature_OI[2])
+  
+  print(VlnPlot(hepa_clusterOI, group.by = "time_experiment", features = feature_OI[1], slot = "counts", pt.size = 0) + 
+          geom_boxplot(width=0.1, fill="white") + 
+          labs(title = interesting_genes[i]))
+}
 ```
 
 ##3-6. UMAP & Feature Plot
 
 Plot interesting genes back in UMAP and Feature plot
 ```{r}
-# Plot_features <- function(gene, cluster_OI) {
-# 
-#   for (i in 1:12){
-#     genename <- tab[which(rownames(tab) == paste0(gene, ".", cluster_OI)),"Symbol"]
-#     
-#     dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
-#     jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
-#     
-#     subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
-#     highlight_cells <- Cells(subset)
-#     dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
-#   
-#     feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
-#     featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
-#     
-#     print(dimplot + featureplotwithtitle)
-#     
-#     dev.off()
-#   }
-# }
+Plot_features <- function(gene, cluster_OI) {
+
+  for (i in 1:12){
+    genename <- tab[which(rownames(tab) == paste0(gene, ".", cluster_OI)),"Symbol"]
+    
+    dir.create(paste0("./FeaturePlots/", cluster_OI, "_", genename))
+    jpeg(paste0("./FeaturePlots/", cluster_OI, "_", genename, "/",cluster_OI, "_", genename, "-", experiments[i], ".jpg"), width = 1500, height = 750)
+    
+    subset <- subset(x = hepa_celltypeOI, subset = time_experiment == experiments[i])
+    highlight_cells <- Cells(subset)
+    dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(highlight_cells), sizes.highlight = 0.5, label = TRUE, label.size=3)
+  
+    feature_baseplot <- FeaturePlot(subset, features = gene, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE)
+    featureplotwithtitle <- feature_baseplot + labs(title = paste0(genename, ": ",experiments[i]))
+    
+    print(dimplot + featureplotwithtitle)
+    
+    dev.off()
+  }
+}
 ```
 
 ```{r, message=FALSE}

@@ -93,7 +93,7 @@ celltype_level <- levels(factor(hepatectomy_expression$celltype))
 celltype_level
 celltype_freq <- count(hepatectomy_expression$celltype)
 
-bp_celltype <- barplot(celltype_freq$freq, ylim = c(0, 30000),names.arg = celltype_freq$x, ylab="Counts", main = "Cell-type Frequency Table", las=2)
+bp_celltype <- barplot(celltype_freq$freq, ylim = c(0, 30000),names.arg = celltype_freq$x, ylab="Number of Cells", main = "Cell-type Frequency Table", las=2)
 text(bp_celltype, celltype_freq$freq, labels=celltype_freq$freq, pos=3, xpd=TRUE)
 ```
 
@@ -139,19 +139,33 @@ levels(factor(hepatectomy_expression$experiment))
 
 **Analyze number of cell(type)s per time-point**
 ```{r}
+# # create dataframe for analysis
+# df_time <- as.data.frame(cbind(hepatectomy_expression$time, hepatectomy_expression$celltype))
+# colnames(df_time) <- c("time", "celltype")
+# 
+# df_time$time_type <- paste0(df_time$time, "_", df_time$celltype) # grouping. 11x7=77 factors
+# df_time <- df_time[df_time$celltype %in% celltype_OI,]
+# head(df_time)
+# 
+# 
+# # Timepoint frequency table
+# time_type.freq <- count(df_time$time_type)
+# time_type.freq$time <- sapply(strsplit(time_type.freq$x, "_"), "[", 1)
+# time_type.freq$type <- sapply(strsplit(time_type.freq$x, "_"), "[", 2)
+# head(time_type.freq)
+
 # create dataframe for analysis
-df_time <- as.data.frame(cbind(hepatectomy_expression$time, hepatectomy_expression$celltype))
+df_time <- as.data.frame(cbind(hepatectomy_expression$time_experiment, hepatectomy_expression$celltype))
 colnames(df_time) <- c("time", "celltype")
 
-df_time$time_type <- paste0(df_time$time, "_", df_time$celltype) # grouping. 11x7=77 factors
+df_time$time_type <- paste0(df_time$time, ".", df_time$celltype) # grouping. 11x7=77 factors
 df_time <- df_time[df_time$celltype %in% celltype_OI,]
 head(df_time)
 
-
 # Timepoint frequency table
 time_type.freq <- count(df_time$time_type)
-time_type.freq$time <- sapply(strsplit(time_type.freq$x, "_"), "[", 1)
-time_type.freq$type <- sapply(strsplit(time_type.freq$x, "_"), "[", 2)
+time_type.freq$time <- sapply(strsplit(time_type.freq$x, "[.]"), "[", 1)
+time_type.freq$type <- sapply(strsplit(time_type.freq$x, "[.]"), "[", 2)
 head(time_type.freq)
 ```
 
@@ -163,12 +177,17 @@ aggregate(time_type.freq$freq, by=list(Category=time_type.freq$time), FUN=sum)
 **Stacked cell-type frequency plot in each timepoint**
 ```{r}
 # Plot frequencies in stacked bar plot
-time_type.freq$time <- factor(time_type.freq$time, levels = levels(factor(hepatectomy_expression$time)))
+#time_type.freq$time <- factor(time_type.freq$time, levels = levels(factor(hepatectomy_expression$time_experiment)))
+#head(time_type.freq)
+```
+
+```{r}
 
 time_type.plot <- ggplot(time_type.freq, aes(x = time, y = freq, fill = type)) + 
   geom_bar(stat = "identity") +
   geom_text(aes(label = freq), position = position_stack(vjust = 0.5), size = 3) +
-  ggtitle("Cell-type frequencies in each timepoint")
+  ggtitle("Cell-type frequencies in each timepoint") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
 time_type.plot
 ```
@@ -304,7 +323,8 @@ hepa_celltypeOI = subset(x = hepatectomy_expression, idents = celltype_OI)
 ```
 
 ```{r}
-DimPlot(hepa_celltypeOI)
+hepa_celltypeOI = subset(x = hepa_celltypeOI, subset = time_experiment %in% experiments)
+DimPlot(hepa_celltypeOI, label = TRUE) + NoLegend()
 ```
 
 
@@ -356,7 +376,15 @@ for (i in 1:12){
 
 **Timepoint as features**
 ```{r}
-DimPlot(hepa_celltypeOI, group.by="time_experiment")
+#DimPlot(hepa_celltypeOI, group.by="time_experiment")
+#DimPlot(hepa_celltypeOI, split.by = "time_experiment", ncol = 3)
+for (time in experiments){
+  subset <- subset(x = hepa_celltypeOI, subset = time_experiment == as.character(time))
+  plot_timepoint <- DimPlot(hepa_celltypeOI, cells.highlight = list(Cells(subset)), 
+                            sizes.highlight = 0.1, label = TRUE, label.size=3) +
+                    labs(title = time)
+  print(plot_timepoint)
+}
 ```
 
 
@@ -364,8 +392,8 @@ DimPlot(hepa_celltypeOI, group.by="time_experiment")
 **Cell-cycle as features**
 ```{r}
 #hepa_cellcycle <- RunPCA(hepa_cellcycle, features = c("S.Score", "G2M.Score"))
-DimPlot(hepa_celltypeOI, group.by= "Phase")
-DimPlot(hepa_celltypeOI, group.by= "phase")
+#DimPlot(hepa_celltypeOI, group.by= "Phase")
+DimPlot(hepa_celltypeOI, group.by= "phase") + labs(title = "Cell States")
 ```
 
 # 3. Differentially Expressed Genes

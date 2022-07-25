@@ -1,0 +1,256 @@
+---
+title: "DE_PerTime"
+author: "Heesoo Song"
+date: '2022 6 23 '
+output: html_document
+---
+
+```{r, message = FALSE}
+library(SeuratObject)
+library(Seurat)
+library(nichenetr)
+library(tidyverse)
+library(ggplot2)
+library(edgeR)
+library(rmarkdown)
+library(SingleCellExperiment)
+library(DEsingle)
+library(Matrix.utils)
+```
+
+# 0. Load Dataset
+```{r}
+IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
+```
+
+```{r}
+# Load processed expression data of interacting cells (Decontaminated)
+library(celda)
+sce <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sce_DecontX.rds")
+```
+
+```{r}
+celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+
+# experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+experiments <- c("3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+
+#hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+hours <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+```
+
+```{r}
+vis_path <- "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Dynamic_NicheNet/DE_PerTime/"
+```
+
+
+# 1. Loop DE process over all time points
+```{r echo = TRUE, results='hide'}
+tp1_vector <- hours[1:(length(hours)-1)]
+tp2_vector <- hours[2:length(hours)]
+
+DE_list_allTP <- list()
+logFC_list_allTP <- list()
+DE_summary <- data.frame(celltype = c(), timepoint = c(), DEgenes = c())
+ 
+for (i in 1:length(tp1_vector)){
+  tp1 <- tp1_vector[i]
+  tp2 <- tp2_vector[i]
+  
+  # Subset sce object
+  hepa_timeOI <- sce[,sce$time %in% c(tp1, tp2)]
+  
+  print(paste0(tp1, "_", tp2))
+  # 2. DE analysis (DEsingle)
+  
+  #Compare differentially expressed genes between two timepoints in a cell type.
+  #adjusted p=1 means inability to reject the null at any significance level; in intuitive terms, this means ``no evidence against the null''
+  
+  DE_list <- list()
+  logFC_list <- list()
+  for (celltype in celltype_OI){
+    onecelltype_sce <- hepa_timeOI[,hepa_timeOI$ident == celltype]
+    
+    cells1 <- colnames(onecelltype_sce[,onecelltype_sce$time == tp2])
+    cells2 <- colnames(onecelltype_sce[,onecelltype_sce$time == tp1])
+    
+    # The calculation of FindMarkers had to be done semi-manually in order to use decontaminated counts
+    counts <- decontXcounts(onecelltype_sce)
+    
+    # Calculate logFC for all genes
+    logFC <- FoldChange(counts, cells.1 = cells1, cells.2 = cells2, mean.fxn = rowMeans, fc.name = "avg_log2FC")
+    logFC_list[[celltype]] <- logFC
+    
+    
+    # FindMarkers
+    #DE_genes <- FindMarkers(onecelltype_seurat, ident.1 = tp2, ident.2 = tp1, group.by = "time", logfc.threshold = 0.5)
+    DE_genes <- FindMarkers(counts, cells.1 = cells1, cells.2 = cells2, logfc.threshold = 1, fc.results = logFC)
+
+    ## add to list
+    DE_list[[celltype]] <- DE_genes
+    
+    ## Save number of DE genes for summary plot
+    DE_summary_temp <- data.frame(celltype = celltype, timepoint = as.character(tp2), DEgenes = dim(DE_genes)[1], Up = dim(DE_genes[DE_genes$avg_log2FC > 0, ])[1], Down = dim(DE_genes[DE_genes$avg_log2FC < 0, ])[1])
+    DE_summary <- rbind(DE_summary, DE_summary_temp)
+    
+  }
+  
+  DE_list_allTP[[as.character(tp2)]] <- DE_list
+  logFC_list_allTP[[as.character(tp2)]] <- logFC_list
+}
+```
+
+
+# 2. Summarize result
+
+```{r}
+summary_df <- data.frame(avg_log2FC = c(), gene = c(), celltype = c(), timepoint = c())
+
+for (i in 1:length(logFC_list_allTP)){
+  for (j in 1:length(logFC_list_allTP[[i]])){
+    # Dataframe presenting one cell type at one time gap
+    summary_df_temp <- data.frame(row.names = paste0(rownames(logFC_list_allTP[[i]][[j]]), "_", names(logFC_list_allTP[[i]][j]), "_", names(logFC_list_allTP[i])), avg_log2FC = logFC_list_allTP[[i]][[j]]$avg_log2FC, gene = rownames(logFC_list_allTP[[i]][[j]]), celltype = names(logFC_list_allTP[[i]][j]), timepoint = names(logFC_list_allTP[i]))
+    
+    # Add "p-value" information. If insignificant (not in DE genes list), put p-value = 1.
+    DE_list.p_value <- data.frame(row.names = rownames(DE_list_allTP[[i]][[j]]), p_val = DE_list_allTP[[i]][[j]]$p_val)
+    summary_df_temp <- merge(summary_df_temp, DE_list.p_value, by.x = "gene", by.y = 0, all.x = TRUE)
+    summary_df_temp[is.na(summary_df_temp)] <- 1
+    
+    # Integrate temporary dataframe to full dataframe
+    summary_df <- rbind(summary_df, summary_df_temp)
+  }
+}
+```
+
+```{r}
+# # Add column with gene symbol
+# rownames_df <- data.frame("ENSEMBL" = summary_df$ENSEMBL)
+# rownames_df["order"] <- c(1:dim(rownames_df)[1])
+# gene_ID <- merge(rownames_df, IDtoSymbol_matrix, by.x="ENSEMBL", by.y = "ensembl_gene_id", all.x=TRUE)
+# 
+# ## Fill rest of NA with ENSEMBL ID (ID no longer in the ENSEMBL database)
+# gene_ID$external_gene_name[which(gene_ID$external_gene_name == "")] <- gene_ID$ENSEMBL[which(gene_ID$external_gene_name == "")]
+# gene_ID$external_gene_name[which(is.na(gene_ID$external_gene_name))] <- gene_ID$ENSEMBL[which(is.na(gene_ID$external_gene_name))]
+# gene_ID <- gene_ID[order(gene_ID$order),]
+# 
+# ## Change rownames of SCE
+# summary_df["SYMBOL"] <- gene_ID$external_gene_name
+
+# Add column with gene_celltype combination
+summary_df["gene_celltype"] <- paste0(summary_df$gene, "_", summary_df$celltype)
+
+head(summary_df)
+```
+
+
+## 2-1. Check genes with continuous significant increase/decrease of expression
+```{r}
+updown_summary_prep <- summary_df[summary_df$p_val < 1,]
+updown_summary <- pivot_wider(updown_summary_prep[,c("gene_celltype", "timepoint", "avg_log2FC", "celltype")], names_from = timepoint, values_from = avg_log2FC)
+head(updown_summary)
+```
+
+```{r}
+library(ggrepel)
+
+for (celltype in celltype_OI){
+  updown_summary_celltype <- updown_summary[updown_summary$celltype == celltype,3:11]
+  box <- boxplot(updown_summary_celltype, ylab="log2FC", plot = FALSE)
+  boxaverage <- data.frame(average = box$stats[3,], upper_CI = box$conf[2,], lower_CI = box$conf[1,], n = box$n, time = as.numeric(box$names))
+  
+  cluster_exp_plot <- ggplot(boxaverage) +
+      geom_errorbar(aes(as.numeric(box$names), ymin = lower_CI, ymax = upper_CI), width = 0.2) +
+      geom_line(aes(x = time, y = average), size = 2) +
+      geom_point(aes(x = time, y = average)) +
+      geom_text_repel(aes(x = time, y = average, label = n), hjust = 0.5, vjust = 0.5, color = "blue") +
+      scale_x_continuous(breaks = as.numeric(box$names)) +
+      geom_hline(yintercept = 0,colour = "red") +
+      labs(title = paste0("Average Log2FC: ", celltype)) +
+      theme_bw() +
+      theme(plot.title = element_text(size=15, hjust=0.5))
+  print(cluster_exp_plot)
+}
+```
+
+
+
+# 3. Plot
+
+## 1) Plot number of DE genes per timepoint of each cell type
+```{r}
+DE_summary$timepoint <- factor(DE_summary$timepoint, levels = as.character(tp2_vector))
+head(DE_summary)
+```
+
+```{r}
+#pdf(file = paste(vis_path, "Total_DEgenes.pdf", sep=""), width = 7, height = 12)
+
+ggplot(DE_summary, aes(x=timepoint, y = DEgenes, fill = celltype)) +
+  geom_col() +
+  geom_text(aes(label = DEgenes), position = position_stack(vjust = 0.5), size =2) +
+  theme_bw() +
+  labs(title = "Number of DE genes", y = "Number of DE genes")
+
+#dev.off()
+```
+
+## 2) Plot number of up/down regulated DE genes per time point of each cell type
+
+**Upregulation**
+```{r}
+#pdf(file = paste(vis_path, "Upregulated_DEgenes.pdf", sep=""), width = 7, height = 12)
+
+Upregulated_DEgenes <- ggplot(DE_summary, aes(x=timepoint, y = Up, fill = celltype)) +
+  geom_col() +
+  geom_text(aes(label = Up), position = position_stack(vjust = 0.5), size =2) +
+  theme_bw() +
+  labs(title = "Number of Up-regulated DE genes", y = "Number of DE genes")
+
+#dev.off()
+```
+
+**Downregulation**
+```{r}
+#pdf(file = paste(vis_path, "Downregulated_DEgenes.pdf", sep=""), width = 7, height = 12)
+
+Downregulated_DEgenes <- ggplot(DE_summary, aes(x=timepoint, y = Down, fill = celltype)) +
+  geom_col() +
+  geom_text(aes(label = Down), position = position_stack(vjust = 0.5), size =2) +
+  theme_bw() +
+  labs(title = "Number of Down-regulated DE genes", y = "Number of DE genes")
+
+#dev.off()
+```
+
+```{r}
+pdf(file = paste(vis_path, "Up_Down_regulated_DEgenes.pdf", sep=""), width = 12, height = 5)
+Upregulated_DEgenes + Downregulated_DEgenes
+dev.off()
+```
+
+## 3) Plot number of up/down regulated DE genes per time point of each cell type separately
+```{r}
+pdf(file = paste(vis_path, "Up_Down_regulated_DEgenes_celltype_separated.pdf", sep=""), width = 15, height = 5)
+
+ggplot(DE_summary) +
+  geom_col(aes(x=timepoint, y = Up), fill = "red") +
+  geom_text(aes(label = Up, x = timepoint, y = (Up + 100)), size =2) +
+  geom_col(aes(x=timepoint, y = -Down), fill = "blue") +
+  geom_text(aes(label = Down, x = timepoint, y = (-Down - 100)), size =2) +
+  facet_grid(~ celltype) +
+  geom_hline(yintercept = 0,colour = "grey90") +
+  labs(y = "Number of DE genes", title = "Number of DE genes per cell type") +
+  theme_bw()
+  
+dev.off()
+```
+
+
+
+
+# 4. Save DE results for NicheNet analysis
+```{r}
+# saveRDS(summary_df, file = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Summary_allgenes_PerTime.rds")
+```
+
+

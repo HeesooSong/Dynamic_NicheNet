@@ -1,0 +1,243 @@
+---
+title: "Untitled"
+author: "Heesoo Song"
+date: '2022 5 11 '
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+library(ggvenn)
+library(tibble)
+library(stringr)
+```
+
+
+# 1. Load Data
+```{r cache=TRUE}
+logCPM.obs.p2 = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_phase2.csv")
+logCPM.fit.p2 = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_phase2.csv")
+
+logCPM.obs.p12 = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_allphases.csv")
+logCPM.fit.p12 = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_allphases.csv")
+```
+
+```{r}
+hepa_cluster.p2 <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_phase2.csv")
+hepa_cluster.p12 <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_allphases.csv")
+```
+
+```{r}
+# Preprocess cluster data
+## Assign clear rownames
+rownames(hepa_cluster.p2) <- NULL
+hepa_cluster.p2 <- hepa_cluster.p2 %>% column_to_rownames(var="Row.names")
+
+## Add celltype & Symbol columns to cluster matrix
+extract_geneID <- as.data.frame(str_split(rownames(hepa_cluster.p2), "_", simplify=TRUE))
+hepa_cluster.p2$Symbol <- extract_geneID$V1
+hepa_cluster.p2$celltype <- extract_geneID$V2
+head(hepa_cluster.p2)
+```
+
+```{r}
+# Preprocess cluster data
+## Assign clear rownames
+rownames(hepa_cluster.p12) <- NULL
+hepa_cluster.p12 <- hepa_cluster.p12 %>% column_to_rownames(var="Row.names")
+
+## Add celltype & Symbol columns to cluster matrix
+extract_geneID <- as.data.frame(str_split(rownames(hepa_cluster.p12), "_", simplify=TRUE))
+hepa_cluster.p12$Symbol <- extract_geneID$V1
+hepa_cluster.p12$celltype <- extract_geneID$V2
+head(hepa_cluster.p12)
+```
+
+
+# 2. Compare overlapping genes with all celltypes
+
+## 1) Check if we are comparing the correct clusters with same/similar temporal trend
+...And yes we are :)
+```{r}
+hours2 <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+hours12 <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+
+par(mfrow=c(2,2))
+
+for (cluster_number in 1:3){
+
+  geneset_oi.p2 <- rownames(hepa_cluster.p2)[hepa_cluster.p2$cluster_number == cluster_number]
+  geneset_oi.p12 <- rownames(hepa_cluster.p12)[hepa_cluster.p12$cluster_number == cluster_number]
+  
+
+  # Batch 1&2
+  cluster_genes <- geneset_oi.p12
+  logCPM.fit.i.p12 <- data.frame(logCPM.fit.p12[cluster_genes,])
+  colnames(logCPM.fit.i.p12) <- hours12
+  
+  box <- boxplot(logCPM.fit.i.p12, plot = FALSE)
+  boxaverage <- box$stats[3,]
+  plot(hours12, boxaverage, type="l", ylab="log-CPM", main=paste0("Phase1&2 Cluster ", cluster_number, " size: ", length(cluster_genes)), pch=16)
+  
+  
+  # Batch 2
+  cluster_genes <- geneset_oi.p2
+  logCPM.fit.i.p2 <- data.frame(logCPM.fit.p2[cluster_genes,])
+  colnames(logCPM.fit.i.p2) <- hours2
+  
+  box <- boxplot(logCPM.fit.i.p2, plot = FALSE)
+  boxaverage <- box$stats[3,]
+  plot(hours2, boxaverage, type="l", ylab="log-CPM", main=paste0("Phase2 Cluster ", cluster_number, " size: ", length(cluster_genes)), pch=16)
+}
+```
+
+
+## 2) Venn Diagram
+Quite happily, most of the genes overlapped between both analysis (with or without the first batch).
+```{r}
+diff.12_2 <- list()
+diff.2_12 <- list()
+
+for (cluster_number in 1:3){
+
+  geneset_oi.p2 <- rownames(hepa_cluster.p2)[hepa_cluster.p2$cluster_number == cluster_number]
+  geneset_oi.p12 <- rownames(hepa_cluster.p12)[hepa_cluster.p12$cluster_number == cluster_number]
+  
+  venn_alltypes <- list(Phase1_2 = geneset_oi.p12, phase2 = geneset_oi.p2)
+  
+  diagram <- ggvenn(
+    venn_alltypes, 
+    fill_color = c("#0073C2FF", "#EFC000FF"),
+    stroke_size = 0.5, set_name_size = 4
+    ) + ggtitle(paste0("Cluster ", cluster_number))
+  print(diagram)
+  
+  diff.12_2[paste0("cluster ", cluster_number)] <- list(cluster_number = setdiff(geneset_oi.p12, geneset_oi.p2))
+  diff.2_12[paste0("cluster ", cluster_number)] <- list(cluster_number = setdiff(geneset_oi.p2, geneset_oi.p12))
+}
+```
+
+
+## 3) Sample trends of the gene group of interest
+```{r}
+plot_trend <- function(gene_celltype){
+  if (gene_celltype %in% rownames(logCPM.obs.p12)){
+    logCPM.obs.i.p12 <- logCPM.obs.p12[gene_celltype,]
+    logCPM.fit.i.p12 <- logCPM.fit.p12[gene_celltype,]
+    plot(hours12, logCPM.obs.i.p12, ylab="log-CPM", main=paste0("Phase1&2 ",gene_celltype), pch=16, col = rainbow(11)[factor(hours12)])
+    lines(hours12, logCPM.fit.i.p12, col="red", lwd=2)
+  }
+  if (gene_celltype %in% rownames(logCPM.obs.p2)){
+    logCPM.obs.i.p2 <- logCPM.obs.p2[gene_celltype,]
+    logCPM.fit.i.p2 <- logCPM.fit.p2[gene_celltype,]
+    plot(hours2, logCPM.obs.i.p2, ylab="log-CPM", main=paste0("Phase2 ",gene_celltype), pch=16, col = rainbow(11)[factor(hours2)])
+    lines(hours2, logCPM.fit.i.p2, col="red", lwd=2)}
+}
+```
+
+1. Genes that disappeared (phase1&2 - phase2)
+```{r}
+par(mfrow=c(2,2))
+for (gene_celltype in diff.12_2[[2]][1:4]){
+  plot_trend(gene_celltype)
+}
+```
+
+2. Genes that appeared in analysis with phase2 (phase2 - phase1&2)
+```{r}
+par(mfrow=c(2,2))
+for (gene_celltype in diff.2_12[[2]][1:4]){
+  plot_trend(gene_celltype)
+}
+```
+
+
+## 4) Delve into the celltype compartment in set difference (phase1&2 - phase2)
+In cluster 2 and 3 there are no outstanding celltype that are disappeared, but in cluster 1 stellate took 56% of the disappeared genes.
+```{r}
+for (cluster_number in 1:3){
+  genes_celltype <- diff.12_2[[cluster_number]]
+  genes_celltype_matrix <- as.data.frame(str_split(genes_celltype, "_", simplify=TRUE))
+  compartment <- count(genes_celltype_matrix, V2)
+  compartment[,"%"] <- compartment$n / length(diff.12_2[[cluster_number]]) * 100
+  
+  print(compartment)
+}
+```
+
+1. What's wrong with 134 stellates (cluster 1) that have disappeared (become insignificant = no significant time effect) from analysis with phase1&2?
+
+- ANSWER: nothing visible in particular... model decided that there were time effect when the first batch is included but there are no more significant time effect when the data is analyzed only with the second batch. 
+```{r}
+genes_celltype <- diff.12_2[[1]]
+genes_celltype_matrix <- as.data.frame(str_split(genes_celltype, "_", simplify=TRUE))
+genes_celltype_matrix[,"genes_celltype"] <- genes_celltype
+cluster1_stellates <- genes_celltype_matrix$genes_celltype[which(genes_celltype_matrix$V2 == "stellate")]
+
+par(mfrow=c(2,2))
+for (gene_celltype in cluster1_stellates[1:10]){
+  plot_trend(gene_celltype)
+}
+```
+
+
+```{r}
+all_hepa_targets <- c("Abcc2",     "Adh1" ,     "Akr1c6" ,   "Apol9a"  ,  "Apol9b"  ,  "Bcl6" ,    
+"Ccn1"   ,   "Cldn1" ,    "Dhrs3" ,    "Dusp1"  ,   "F13b"    ,  "Fasn"     ,
+"Klk1b4"   , "Nfe2l2" ,   "Nt5e",     "Pparg"  ,   "Serpina6" , "Slco1b2"  ,
+ "Tbl1x"  ,   "Ugt1a1" ,   "Ugt2b35",   "Ugt2b36"  , "Aldh3a2" ,  "Bhlhe40" , 
+ "Cdh2"    ,  "Csf1r"  ,   "Dapk1"    , "Dixdc1"  ,  "Gas1"  ,    "Inhba"  ,  
+ "Maf"     ,  "Mfsd12"  ,  "Plk2"     , "Slc19a2" ,  "Slc46a3",   "Sparc"   , 
+ "Afm"      , "Akr1c18"  , "Arhgap24" , "Grb7"    ,  "Grk5"   ,   "Hmgcs1"   ,
+ "Serpina7"  ,"Arrdc3"  ,  "Hsd3b3"   , "Hsd3b5"  ,  "Ubc"    ,   "Acly"     ,
+"Acss2"     ,"Fdft1"    , "H2-Q1"   ,  "H2-Q4"    , "H2-Q7"   ,  "Idi1"     ,
+"Insig1"  ,  "Ldlr"     , "Lpl"     ,  "Rnf145"   , "Scd1"    ,  "Scd2"     ,
+ "Slc1a5"  ,  "Srebf1"  ,  "Syt1"   ,   "Bbc3"    ,  "Cd36"    ,  "Cyp26a1"  ,
+ "Acsl5"    , "Bdh1"    ,  "Cd5l"   ,   "Lyz2"    ,  "Ngef"   ,   "Selenoi"  ,
+ "Tmem150a"  ,"Nsdhl"   ,  "Ppard"   ,  "Fcgr2b"  ,  "Tob1"   ,   "Prnp"     ,
+ "Rap2b"    , "Asah1"   ,  "Gabarapl1", "Gclc"    ,  "Gngt1"  ,   "Irs1"     ,
+ "Lactb2" ,   "Abcb11"  ,  "Akr1d1" ,   "Cyp1a2"  , "Cyp2a5"  ,  "Dpp4"     ,
+"Fam149a"  , "Gpld1"    , "Klkb1"   ,  "Lss"      , "Ly6e"    ,  "Mme"      ,
+"Mrc1"    ,  "Olfml1"   , "Ppp1r3c" ,  "Rdh16f2"  , "Rdh9"    ,  "Anxa2"    ,
+ "Pmvk"    ,  "Tsc22d1" ,  "Tnfrsf19",  "Steap3"  ,  "Cth"    ,   "Aqp8"     ,
+ "Prex2"    , "Trmt9b"  ,  "Cyp2c29"  , "Cyp2c38" ,  "Lect2"  ,   "Lrtm1"    ,
+ "Spink1"   , "Tmie"    ,  "Add3"     , "Bcar3"   ,  "Rorc"   ,   "Tuba1c"   ,
+ "Foxn3"    , "Src")
+
+hepa_hepa_targets <- c("Abcc2"    , "Adh1"  ,    "Akr1c6" ,   "Apol9a" ,   "Apol9b"    ,"Bcl6"   ,  
+"Ccn1"    ,  "Cldn1"  ,   "Dhrs3"   ,  "Dusp1"   ,  "F13b"     , "Fasn",
+"Klk1b4"  ,  "Nfe2l2"  ,  "Nt5e"    ,  "Pparg"  ,   "Serpina6",  "Slco1b2",
+"Tbl1x"   ,  "Ugt1a1" ,   "Ugt2b35" ,  "Ugt2b36"  , "Aldh3a2" ,  "Bhlhe40",
+ "Cdh2"   ,   "Csf1r" ,    "Dapk1"  ,   "Dixdc1"  ,  "Gas1"   ,   "Inhba",
+ "Maf"    ,   "Mfsd12"  ,  "Plk2"    ,  "Slc19a2" ,  "Slc46a3",   "Sparc",
+ "Afm"    ,   "Akr1c18"  , "Arhgap24",  "Grb7"    ,  "Grk5"   ,   "Hmgcs1",
+ "Serpina7",  "Arrdc3"  ,  "Hsd3b3" ,   "Hsd3b5"  ,  "Ubc"     ,  "Acly",
+ "Acss2"  ,   "Fdft1"   ,  "H2-Q1"  ,   "H2-Q4"   ,  "H2-Q7"  ,   "Idi1",
+ "Insig1" ,   "Ldlr"    ,  "Lpl"    ,   "Rnf145"  ,  "Scd1"   ,   "Scd2",
+"Slc1a5"  ,  "Srebf1"   , "Syt1"    ,  "Bbc3"     , "Cd36"    ,  "Cyp26a1",
+ "Acsl5"  ,   "Bdh1"    ,  "Cd5l"   ,   "Lyz2"    ,  "Ngef"   ,   "Selenoi",
+ "Tmem150a",  "Nsdhl"   ,  "Ppard"  ,   "Fcgr2b"  ,  "Tob1"   ,   "Prnp",
+ "Rap2b"  ,   "Asah1"   ,  "Gabarapl1", "Gclc"    ,  "Gngt1"  ,   "Irs1",
+ "Lactb2" ,   "Abcb11"   , "Akr1d1" ,   "Cyp1a2"  ,  "Cyp2a5" ,   "Dpp4",
+ "Fam149a"  , "Gpld1"    , "Klkb1"  ,   "Lss"     ,  "Ly6e"   ,   "Mme",
+ "Mrc1"     , "Olfml1"   , "Ppp1r3c"  , "Rdh16f2" ,  "Rdh9"   ,   "Anxa2",
+ "Pmvk"     , "Tsc22d1" ,  "Tnfrsf19" , "Steap3"  ,  "Cth"    ,   "Add3",
+ "Bcar3"    , "Rorc"    ,  "Tuba1c" ,   "Foxn3"   ,  "Src"    ,   "Dsp")
+```
+
+```{r}
+library(ggvenn)
+diff <- list(all_hepa = all_hepa_targets, hepa_hepa = hepa_hepa_targets)
+  
+ggvenn(
+  diff,
+  fill_color = c("#0073C2FF", "#EFC000FF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+```{r}
+setdiff(all_hepa_targets, hepa_hepa_targets)
+```
+```{r}
+setdiff(hepa_hepa_targets, all_hepa_targets)
+```
+

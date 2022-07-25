@@ -1,0 +1,742 @@
+---
+title: "Dynamic_NicheNet"
+author: "Heesoo Song"
+date: '2022 2 21 '
+output: html_document
+---
+
+# 0. Install/Load packages
+
+```{r}
+#install.packages("devtools")
+#install.packages("htmltools")
+#BiocManager::install("limma")
+#devtools::install_github("saeyslab/nichenetr")
+#install.packages("tidyverse")
+```
+
+
+```{r message=FALSE, warning=FALSE}
+library(nichenetr)
+library(tidyverse)
+library(Matrix)
+library(dplyr)
+library(rmarkdown)
+library(tibble)
+library(Seurat)
+library(reshape)
+```
+
+# 1. Load datasets
+
+## 1) NicheNet prior models
+Numbers in the ligand-target matrix represents the ligand-target regulatory potential scores between all pairs of ligands and target genes. These scores are calculated using network propagation methods on the integrated networks to propagate the signal from a ligand, over receptors, signaling proteins and transcriptional regulators, to end at target genes.
+```{r cache=TRUE}
+# Load ligand-target prior model
+#ligand_target_matrix = readRDS(url("https://zenodo.org/record/5884439/files/ligand_target_matrix_nsga2r_final_mouse.rds"))  # New version
+#ligand_target_matrix = readRDS(url("https://zenodo.org/record/3260758/files/ligand_target_matrix.rds"))  # Old version
+
+# in case bad internet connection
+ligand_target_matrix = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/ligand_target_matrix_nsga2r_final_mouse.rds")
+ligand_target_matrix[1:5, 1:5]
+```
+Putative ligand-receptor links were gathered from NicheNet's ligand-receptor data sources.
+```{r cache=TRUE}
+#lr_network = readRDS(url("https://zenodo.org/record/5884439/files/lr_network_mouse_21122021.rds")) # new version
+#lr_network = readRDS(url("https://zenodo.org/record/3260758/files/lr_network.rds")) # old version
+
+# # in case bad internet connection
+# lr_network = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/lr_network_mouse_21122021.rds")
+# head(lr_network)
+```
+
+```{r cache=TRUE}
+# get the weights of the ligand-receptor interactions as used in the NicheNet model
+#weighted_networks = readRDS(url("https://zenodo.org/record/5884439/files/weighted_networks_nsga2r_final_mouse.rds")) # New version
+#weighted_networks = readRDS(url("https://zenodo.org/record/3260758/files/weighted_networks.rds")) # Old version
+
+# # in case internet connection is bad
+# weighted_networks = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/weighted_networks_nsga2r_final_mouse.rds")
+# weighted_networks_lr = weighted_networks$lr_sig %>% inner_join(lr_network %>% distinct(from,to), by = c("from","to"))
+# head(weighted_networks$lr_sig)
+# head(weighted_networks$gr)
+```
+## 2) Cluster Data
+Genes are clustered by their temporal trend in previous stage (DE analysis)
+```{r cache=TRUE}
+# #hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_phase2.csv")
+# hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_DecontX.csv")
+# paged_table(head(hepa_cluster))
+```
+
+```{r}
+# # Preprocess cluster data
+# ## Assign clear rownames
+# rownames(hepa_cluster) <- NULL
+# hepa_cluster <- hepa_cluster %>% column_to_rownames(var="Row.names")
+# 
+# ## Add celltype & Symbol columns to cluster matrix
+# extract_geneID <- as.data.frame(str_split(rownames(hepa_cluster), "_", simplify=TRUE))
+# hepa_cluster$Symbol <- extract_geneID$V1
+# hepa_cluster$celltype <- extract_geneID$V2
+# paged_table(head(hepa_cluster))
+```
+
+## 3) Temporal trend of genes with fitted/observed values
+```{r cache=TRUE}
+# # Phase 2
+# # logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_phase2.csv")
+# # logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_phase2.csv")
+# 
+# # DecontX
+# logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv")
+# logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_DecontX.csv")
+```
+
+## 4) Expression Data
+```{r message=FALSE, cache=TRUE}
+# hepa_rds <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+# sce <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sce_DecontX.rds")
+```
+
+```{r}
+# # Preprocess expression data
+# ## Subset to seven cell-types
+# celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+# hepa_celltypeOI <- subset(x = hepa_rds, idents = celltype_OI)
+# 
+# ## Factorize experiment timepoint
+# #experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+# #hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+# experiments <- c("3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+# hours <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+# 
+# hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
+# hepa_celltypeOI = subset(x = hepa_celltypeOI, subset = time_experiment %in% experiments)
+# 
+# rm(hepa_rds)
+```
+
+```{r}
+# library(celda)
+# hepa_sample_info <- colData(sce)
+# hepa_expression <- t(decontXcounts(sce))
+```
+
+```{r cache=TRUE}
+# ## change ENSEMBL to gene symbol in column names
+# 
+# # library(biomaRt)
+# # ensembl <- useEnsembl(biomart="ensembl", dataset = "mmusculus_gene_ensembl")
+# # IDtoSymbol_matrix <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), filters = "ensembl_gene_id", values = unique(colnames(hepa_expression)), mart = ensembl)
+# 
+# IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
+```
+
+```{r}
+# expression_colnames <- data.frame(colnames(hepa_expression))
+# expression_colnames["order"] <- c(1:dim(expression_colnames)[1])
+# symbol_list <- merge(expression_colnames, IDtoSymbol_matrix,by.x = "colnames.hepa_expression.", by.y = "ensembl_gene_id", all.x = TRUE)
+# 
+# ## Fill rest of NA with ENSEMBL ID (ID no longer in the ENSEMBL database)
+# symbol_list$external_gene_name[is.na(symbol_list$external_gene_name)] <- symbol_list$colnames.hepa_expression.[is.na(symbol_list$external_gene_name)]
+# symbol_list <- symbol_list[order(symbol_list$order),]
+# 
+# ## In old version, the gene names are in uppercase characters, while the new version is not.
+# ### New version
+# colnames(hepa_expression) <- symbol_list$external_gene_name
+# 
+# ### Old version
+# #colnames(hepa_expression) <- casefold(symbol_list$external_gene_name, upper=TRUE)
+# #hepa_cluster$Symbol <- casefold(hepa_cluster$Symbol, upper=TRUE)
+# 
+# hepa_expression[1:5, 1:5]
+```
+
+
+# 2. Define expressed genes
+
+- sender cell type, receiver cell type. We will analyze 7x7x3 different combinations
+- 7 cell types ("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+- 11 time points ("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+- consider a gene to be expressed when it is expressed in at least 10% of cells
+- filter cells by each time point (sample) rather than to filter by cell type with all time points as the genes may be expressed in only at few time points while lowly expressed in the other time points.
+
+```{r}
+sender_celltype <- "all"
+receiver_celltype <- celltype_OI[7]
+cluster_number <- 1
+main_path <- "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Dynamic_NicheNet"
+dir.create(file.path(main_path, paste0("Dynamic_NicheNet_DecontX_", sender_celltype, "_", receiver_celltype, "_", cluster_number)))
+vis_path <- paste0(main_path, "/Dynamic_NicheNet_DecontX_", sender_celltype, "_", receiver_celltype, "_", cluster_number, "/")
+
+# Extract sender & receiver cells
+if (sender_celltype == "all"){
+  expressed_genes_sender <- c()
+  expressed_genes_receiver <- c()
+  for (timepoint in experiments){
+    for (celltype in celltype_OI){
+      # Define sender
+      sender_ids <- row.names(hepa_sample_info[which(hepa_sample_info$celltype == celltype & hepa_sample_info$time_experiment == timepoint),])
+      expressed_genes_sender_onetype <- colSums(hepa_expression[sender_ids,] >= 1) %>% sapply(function(x){x/length(sender_ids)*100}) %>% .[. >= 10] %>% names()
+      expressed_genes_sender <- c(expressed_genes_sender, expressed_genes_sender_onetype)
+    }
+    # Define receiver
+    receiver_ids <- row.names(hepa_sample_info[which(hepa_sample_info$celltype == receiver_celltype & hepa_sample_info$time_experiment == timepoint),])
+    expressed_genes_receiver_onetype <- colSums(hepa_expression[receiver_ids,] >= 1) %>% sapply(function(x){x/length(receiver_ids)*100}) %>% .[. >= 10] %>% names()
+    expressed_genes_receiver <- c(expressed_genes_receiver, expressed_genes_receiver_onetype)
+  }
+  expressed_genes_sender <- expressed_genes_sender %>% unique()
+  expressed_genes_receiver <- expressed_genes_receiver %>% unique()
+    
+
+  } else{
+    expressed_genes_sender <- c()
+    expressed_genes_receiver <- c()
+    
+    for (timepoint in experiments){
+      
+      # Define sender
+      sender_ids <- row.names(hepa_sample_info[which(hepa_sample_info$celltype == sender_celltype & hepa_sample_info$time_experiment == timepoint),])
+      expressed_genes_sender_onetype <- colSums(hepa_expression[sender_ids,] >= 1) %>% sapply(function(x){x/length(sender_ids)*100}) %>% .[. >= 10] %>% names()
+      expressed_genes_sender <- c(expressed_genes_sender, expressed_genes_sender_onetype)
+    
+      # Define receiver
+      receiver_ids <- row.names(hepa_sample_info[which(hepa_sample_info$celltype == receiver_celltype & hepa_sample_info$time_experiment == timepoint),])
+      expressed_genes_receiver_onetype <- colSums(hepa_expression[receiver_ids,] >= 1) %>% sapply(function(x){x/length(receiver_ids)*100}) %>% .[. >= 10] %>% names()
+      expressed_genes_receiver <- c(expressed_genes_receiver, expressed_genes_receiver_onetype)
+    }
+    
+    expressed_genes_sender <- expressed_genes_sender %>% unique()
+    expressed_genes_receiver <- expressed_genes_receiver %>% unique()
+}
+```
+
+# 3. Define gene set of interest and background of genes
+This step highly depend on the research question.
+Gene set of interest are the genes in the target cell population that are potentially affected by ligands expressed by signaling cells.In this research, gene set of interest is genes that are showing similar temporal trend in the receiver cell type. Background expressed genes in this research are all genes from the receiver cell type. 
+```{r}
+geneset_oi_raw <- hepa_cluster$Symbol[hepa_cluster$celltype == receiver_celltype & hepa_cluster$cluster_number == cluster_number]
+geneset_oi <- hepa_cluster$Symbol[hepa_cluster$celltype == receiver_celltype & hepa_cluster$cluster_number == cluster_number] %>% .[. %in% rownames(ligand_target_matrix)]
+
+# cluster genes that are not present in the NicheNet ligand-target matrix
+geneset_oi_raw[!geneset_oi_raw %in% geneset_oi]
+
+# cluster genes that are expressed in the receiver cells
+geneset_oi <- geneset_oi[geneset_oi %in% expressed_genes_receiver]
+
+background_expressed_genes <- expressed_genes_receiver %>% .[. %in% rownames(ligand_target_matrix)]
+```
+
+## 1) Check temporal trends of genesetOI
+Check the general temporal trend of geneset of interest (celltype + cluster)
+```{r}
+cluster_genes <- paste0(geneset_oi, "_", receiver_celltype)
+logCPM.fit.i <- data.frame(logCPM.fit[cluster_genes,])
+colnames(logCPM.fit.i) <- hours
+
+# Box plot of clusters through timepoint
+box <- boxplot(logCPM.fit.i, ylim=c(-15, 15), ylab="log-CPM", main=paste0("Gene set of interest: ", length(cluster_genes), " genes"), plot = FALSE)
+boxaverage <- data.frame(average = box$stats[3,], upper_CI = box$conf[2,], lower_CI = box$conf[1,], time = hours)
+
+pdf(file = paste(vis_path, "cluster_shape.pdf", sep=""), width = 12, height = 7)
+cluster_exp_plot <- ggplot(boxaverage) +
+  geom_errorbar(aes(hours, ymin = lower_CI, ymax = upper_CI), width = 0.2) +
+  geom_line(aes(x = time, y = average)) +
+  geom_point(aes(x = time, y = average)) +
+  scale_x_continuous(breaks = hours) +
+  labs(title = paste0("Gene set of interest: ", length(cluster_genes), " genes")) +
+  theme_bw() +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+print(cluster_exp_plot)
+dev.off()
+```
+
+# 4. Define a set of potential ligands
+
+```{r}
+ligands = lr_network %>% pull(from) %>% unique()
+expressed_ligands = intersect(ligands,expressed_genes_sender)
+
+receptors = lr_network %>% pull(to) %>% unique()
+expressed_receptors = intersect(receptors,expressed_genes_receiver)
+
+lr_network_expressed = lr_network %>% filter(from %in% expressed_ligands & to %in% expressed_receptors) 
+paged_table(head(lr_network_expressed))
+```
+
+```{r}
+potential_ligands = lr_network_expressed %>% pull(from) %>% unique() %>% .[. %in% colnames(ligand_target_matrix)]
+```
+
+# 5. Perform NicheNet's ligand activity analysis on the gene set of interest
+predict ligand activities = ranks ligands according to how well their prior target gene predictions correspond to the observed gene expression changes. In other words, assess how well each sender_cell-ligand can predict the receiver_cell gene set compared to the background of expressed genes (predict whether a gene belongs to the receiver_cell program or not)
+
+The true ligand with which the cells were treated should predict the differential expression observed in a dataset better than the other ligands. In other words, informative feature importance scores (=measure for ligand activity) should be higher for this ligand (genes of interest) than for others(background genes). The feature importance measures were calculated for each ligand separately.
+
+Next, evaluate how well the feature importance scores of each dataset-ligand combination can predict the correct ligand activity state. Binary classification. For a specific ligand-dataset combination, classified "active" if the dataset contains expression data of cells treated with that ligand. Then classification evaluatino metrics (AUROC, AUPR, and PCC) are calculated. 
+
+**Compare this result with random prediction**
+```{r}
+# Prediction (not ranked yet)
+ligand_activities = predict_ligand_activities(geneset = geneset_oi, background_expressed_genes = background_expressed_genes, ligand_target_matrix = ligand_target_matrix, potential_ligands = potential_ligands)
+
+# Rank the prediction
+ligand_activities %>% arrange(-aupr)
+best_upstream_ligands = ligand_activities %>% top_n(20, aupr) %>% arrange(-aupr) %>% pull(test_ligand) %>% unique()
+```
+
+```{r}
+pdf(file = paste(vis_path, "Ligand_activity_histogram.pdf", sep=""), width = 12, height = 7)
+
+# show histogram of ligand activity scores
+p_hist_lig_activity = ggplot(ligand_activities, aes(x=aupr)) + 
+  geom_histogram(color="black", fill="darkorange")  + 
+  # geom_density(alpha=.1, fill="orange") +
+  geom_vline(aes(xintercept=min(ligand_activities %>% top_n(20, aupr) %>% pull(aupr))), color="red", linetype="dashed", size=1) + 
+  labs(x="ligand activity (AUPR)", y = "# ligands") +
+  theme_classic()
+p_hist_lig_activity
+
+dev.off()
+```
+
+# 6. Infer target genes of top-ranked ligands and visualize in a heatmap
+
+## 1) infer target genes
+If you consider more than the top 250 targets, you will infer more, but less confident ligand-target links.
+
+*drop_na() : NA value in target and weight column means that there are no DE gene in the top 250 targets (gene set of interest). In other words, there were potential targets in top250 (geneset of interest) to be regulated by the ligand.
+```{r}
+active_ligand_target_links_df = best_upstream_ligands %>% lapply(get_weighted_ligand_target_links, geneset = geneset_oi, ligand_target_matrix = ligand_target_matrix, n = 250) %>% bind_rows() %>% drop_na()
+
+paged_table(head(active_ligand_target_links_df))
+```
+
+## 2) Set cutoff for visualization
+Lowering the quantile cutoff (0.25) will result in a more dense heatmap, whereas increasing this cutoff will result in a more sparse heatmap.
+```{r}
+# visualization
+active_ligand_target_links = prepare_ligand_target_visualization(ligand_target_df = active_ligand_target_links_df, ligand_target_matrix = ligand_target_matrix, cutoff = 0.25) # score below threshold will be set as 0
+```
+
+## 3) Plot putatively active ligand-target links
+The order of the ligands accord to the ranking of the ligand activity prediction.
+```{r}
+order_ligands = intersect(best_upstream_ligands, colnames(active_ligand_target_links)) %>% rev()
+order_targets = active_ligand_target_links_df$target %>% unique() %>% intersect(rownames(active_ligand_target_links))
+
+vis_ligand_target = active_ligand_target_links[order_targets,order_ligands] %>% t()
+vis_ligand_target_renamed <- vis_ligand_target
+colnames(vis_ligand_target_renamed) <- make.names(colnames(vis_ligand_target))
+rownames(vis_ligand_target_renamed) <- make.names(rownames(vis_ligand_target))
+
+pdf(file = paste(vis_path, "Ligand-target_heatmap.pdf", sep=""), width = 12, height = 7)
+
+p_ligand_target_network = vis_ligand_target_renamed %>% make_heatmap_ggplot("Prioritized ligands",paste0("Predicted target genes (", length(order_targets), ")"), color = "purple",legend_position = "top", x_axis_position = "top",legend_title = "Regulatory potential") + scale_fill_gradient2(low = "whitesmoke",  high = "purple", breaks = c(0,0.05,0.10)) + theme(axis.text.x = element_text(face = "italic", size = 6))
+
+p_ligand_target_network
+
+dev.off()
+```
+
+**top targets**
+```{r}
+order_targets
+```
+
+
+# 7. Validation
+
+## 1) Ligand-receptor network inference for top-ranked ligands
+Look at which receptors of the receiver cell population can potentially bind to the prioritized ligands from the sender cell population
+```{r}
+# get the ligand-receptor network of the top-ranked ligands
+lr_network_top = lr_network %>% filter(from %in% best_upstream_ligands & to %in% expressed_receptors) %>% distinct(from,to)
+best_upstream_receptors = lr_network_top %>% pull(to) %>% unique()
+
+```
+
+```{r}
+lr_network_top_df = weighted_networks$lr_sig %>% filter(from %in% best_upstream_ligands & to %in% best_upstream_receptors)
+```
+
+```{r}
+# convert to a matrix
+lr_network_top_df = lr_network_top_df %>% spread("from","weight",fill = 0)
+lr_network_top_matrix = lr_network_top_df %>% dplyr::select(-to) %>% as.matrix() %>% magrittr::set_rownames(lr_network_top_df$to)
+
+# perform hierarchical clustering to order the ligands and receptors
+# hierarchical clustering groups similar objects into clusters
+# Ward.D2 = Ward algorithm = creates groups such that variance is minimized within clusters. Dissimilarities are squared before clustering.
+dist_receptors = dist(lr_network_top_matrix, method = "binary")
+hclust_receptors = hclust(dist_receptors, method = "ward.D2")
+order_receptors = hclust_receptors$labels[hclust_receptors$order]
+
+dist_ligands = dist(lr_network_top_matrix %>% t(), method = "binary")
+hclust_ligands = hclust(dist_ligands, method = "ward.D2")
+order_ligands_receptor = hclust_ligands$labels[hclust_ligands$order]
+
+```
+
+```{r}
+pdf(file = paste(vis_path, "Ligand-receptor_heatmap.pdf", sep=""), width = 12, height = 7)
+
+vis_ligand_receptor_network = lr_network_top_matrix[order_receptors, order_ligands_receptor]
+p_ligand_receptor_network = vis_ligand_receptor_network %>% t() %>% make_heatmap_ggplot("Prioritized ligands","Receptors", color = "mediumvioletred", x_axis_position = "top",legend_title = "Prior interaction potential")
+p_ligand_receptor_network
+
+dev.off()
+```
+
+## 2) Visualize expression of top-predicted ligands and their target genes in a combined heatmap
+Further look at expression of ligands & target genes. 
+Combine plots of ligand activity, ligand expression, target gene expression, and ligand-target regulatory potential. 
+```{r}
+library(RColorBrewer)
+library(cowplot)
+library(ggpubr)
+library(ggrepel)
+```
+**ligand activity matrix**
+```{r}
+ligand_aupr_matrix = ligand_activities %>% dplyr::select(aupr) %>% as.matrix() %>% magrittr::set_rownames(ligand_activities$test_ligand)
+
+vis_ligand_aupr = ligand_aupr_matrix[order_ligands, ] %>% as.matrix(ncol = 1) %>% magrittr::set_colnames("AUPR")
+
+```
+
+```{r}
+pdf(file = paste(vis_path, "Ligand_activity.pdf", sep=""), width = 12, height = 7)
+
+p_ligand_aupr = vis_ligand_aupr %>% make_heatmap_ggplot("Prioritized ligands","Ligand activity", color = "darkorange",legend_position = "top", x_axis_position = "top", legend_title = "AUPR\ntarget gene prediction ability)")
+p_ligand_aupr
+
+dev.off()
+```
+
+# 8. Temporal Interpretation
+
+## 1) Single temporal trend
+
+```{r}
+plot_trend_single <- function(gene, celltype){
+  gene_celltype <- paste0(gene, "_", celltype)
+  if (gene_celltype %in% rownames(logCPM.obs)){
+    logCPM.obs.i <- logCPM.obs[gene_celltype,]
+    logCPM.fit.i <- logCPM.fit[gene_celltype,]
+    plot(hours, logCPM.obs.i, ylab="log-CPM", main=gene_celltype, pch=16, col = rainbow(11)[factor(hours)])
+    lines(hours, logCPM.fit.i, col="red", lwd=2)
+  }
+}
+
+plot_trend <- function(interesting_genes, celltype){
+  par(mfrow=c(2,2))
+  
+  for(gene in interesting_genes) {
+    if (celltype == "all"){
+      for (type in celltype_OI){
+        plot_trend_single(gene, type)
+      }
+    } else{
+     plot_trend_single(gene, celltype) 
+    }
+  }
+}
+```
+
+**Active Ligands**
+```{r}
+#plot_trend(order_ligands[5], sender_celltype) 
+```
+
+**ggplot**
+```{r}
+# #plot_trend_single_gg <- function(gene, celltype){
+# gene = "Cklf"
+# celltype = c("hepatocyte", "stellate", "kupffer")
+# 
+#   gene_celltype <- paste0(gene, "_", celltype)
+#   
+#   gene_celltype <- c("Cklf_neutrophil","Uhrf1_hepatocyte")
+#   
+#   logCPM.obs.i <- logCPM.obs[gene_celltype,]
+#   logCPM.fit.i <- logCPM.fit[gene_celltype,]
+#   
+#   colnames(logCPM.obs.i) <- hours
+#   colnames(logCPM.fit.i) <- hours
+#   
+#   prep_ggplot_obs <- logCPM.obs.i %>% rownames_to_column(var = "gene_celltype")
+#   prep_ggplot_fit <- logCPM.fit.i %>% rownames_to_column(var = "gene_celltype")
+#   
+#   prep_ggplot_fit <- melt(prep_ggplot_fit, id = "gene_celltype")
+#   prep_ggplot_obs <- melt(prep_ggplot_obs, id = "gene_celltype")
+# 
+#   prep_ggplot <- cbind(prep_ggplot_fit, prep_ggplot_obs$value)
+#   colnames(prep_ggplot) <- c(colnames(prep_ggplot)[1:2], "fit", "obs")
+#   
+#     
+#   trend_single_gg <- ggplot(prep_ggplot, aes(x = variable, y = fit)) +
+#   geom_line(aes(group = gene_celltype, colour = gene_celltype)) +
+#   geom_point(aes(x = variable, y = obs, colour = gene_celltype)) +
+#   #scale_x_continuous(breaks = hours) +
+#   guides(colour = "none") +
+#   coord_cartesian(clip = "off") +
+#   theme_bw() +
+#   theme(legend.position = "top", plot.margin = margin(0.1, 2.6, 0.1, 0.1, "cm"), plot.title = element_text(hjust = 0.5)) +
+#   geom_text_repel(data = filter(prep_ggplot, variable == max(hours)), aes(label = gene_celltype, color = gene_celltype), direction = "y", hjust = -0.2, cex = 3.5, segment.color = "grey50", xlim = c(-100, 100))+ 
+#   labs(title = "Cklf_neutrophil (ligand) -> Uhrf1_hepatocyte (target)", x = "hours", y = "logCPM")
+# 
+#   print(trend_single_gg)
+# #}
+```
+
+```{r}
+#plot_trend_single_gg("Cklf", "stellate")
+```
+
+
+
+## 2) Correlation between trends of ligands and receptor
+
+1. Prepare calculating correlation, so that correlation matrix not only show the correlations (with lags) but also the ligand-target regulation potential scores. Also, order the matrix by weights to show the top interactions first.
+```{r}
+# pick up non-zero values from ligand_target visualization matrix that is showing weights of top ligands and target genes. 
+weight_coordinates <- which(vis_ligand_target > 0, arr.ind = T)
+ccf_matrix_prep <- data.frame("ligand" = rownames(vis_ligand_target)[weight_coordinates[,1]])
+ccf_matrix_prep[,"target"] <- colnames(vis_ligand_target)[weight_coordinates[,2]]
+ccf_matrix_prep[,"weight"] <- vis_ligand_target[weight_coordinates]
+
+# order by weights (top interactions first)
+ccf_matrix_prep <- ccf_matrix_prep[order(-ccf_matrix_prep$weight),]
+
+# order by top ligands
+ccf_matrix_prep <- ccf_matrix_prep %>% arrange(factor(ligand, levels = rev(order_ligands)))
+```
+
+2.. Calculate correlation & create correlation matrix
+```{r}
+ccf_matrix <- data.frame()
+row <- 1
+for (i in 1:dim(ccf_matrix_prep)[1]){
+  ligand <- ccf_matrix_prep$ligand[i]
+  target <- ccf_matrix_prep$target[i]
+  weight <- ccf_matrix_prep$weight[i]
+  
+  target_celltype <- paste0(target, "_", receiver_celltype)
+
+  if (sender_celltype == "all"){
+    for (type in celltype_OI){
+      ligand_celltype <- paste0(ligand, "_", type)
+      if (ligand_celltype %in% rownames(logCPM.obs)){
+        logCPM.obs.i.ligand <- unlist(logCPM.obs[ligand_celltype,], use.names = FALSE)
+        logCPM.obs.i.target <- unlist(logCPM.obs[target_celltype,], use.names = FALSE)
+  
+        single_ccf <- ccf(logCPM.obs.i.ligand, logCPM.obs.i.target, pl = FALSE)
+        
+        ccf_matrix[row, c("ligand", "target", "weight")] <- ccf_matrix_prep[i,]
+        ccf_matrix[row, c("ligand_celltype", "target_celltype")] <- c(type, receiver_celltype)
+        ccf_matrix[row, as.character(single_ccf$lag)] <- single_ccf$acf
+        
+        row <- row + 1
+       }
+      } 
+  }else{
+    ligand_celltype <- paste0(ligand, "_", receiver_celltype)
+    
+    logCPM.obs.i.ligand <- unlist(logCPM.obs[ligand_celltype,], use.names = FALSE)
+    logCPM.obs.i.target <- unlist(logCPM.obs[target_celltype,], use.names = FALSE)
+
+    single_ccf <- ccf(logCPM.obs.i.ligand, logCPM.obs.i.target, pl = FALSE)
+    
+    ccf_matrix[row, c("ligand", "target", "weight")] <- ccf_matrix_prep[i,]
+    ccf_matrix[row, c("ligand_celltype", "target_celltype")] <- c(sender_celltype, receiver_celltype)
+    ccf_matrix[row, as.character(single_ccf$lag)] <- single_ccf$acf
+    
+    row <- row + 1
+  }
+  
+}
+```
+
+```{r}
+paged_table(head(ccf_matrix))
+```
+
+
+3. Single correlation plot
+negative lag means that the ligand trend is leading the target trend
+```{r}
+for (i in 1:10){
+  
+  ligand_celltype <- paste0(ccf_matrix$ligand[i], "_", ccf_matrix$ligand_celltype[i])
+  target_celltype <- paste0(ccf_matrix$target[i], "_", ccf_matrix$target_celltype[i])
+  
+  logCPM.obs.i.ligand <- unlist(logCPM.obs[ligand_celltype,], use.names = FALSE)
+  logCPM.obs.i.target <- unlist(logCPM.obs[target_celltype,], use.names = FALSE)
+  # logCPM.fit.i.ligand <- unlist(logCPM.fit[ligand_celltype,], use.names = FALSE)
+  # logCPM.fit.i.target <- unlist(logCPM.fit[target_celltype,], use.names = FALSE)
+  
+  pdf(file = paste(vis_path, ligand_celltype, "_", target_celltype, "_correlation.pdf", sep=""), width = 12, height = 7)
+  opar <- par(no.readonly = TRUE)
+  par(mar = c(4, 4.5, 4.5, 2))
+  ccf(logCPM.obs.i.ligand, logCPM.obs.i.target, main = paste0(ligand_celltype, "(ligand) & ", target_celltype, "(target)"))
+  # ccf(logCPM.fit.i.ligand, logCPM.fit.i.target, main = paste0(ligand_celltype, "(ligand) & ", target_celltype, "(target)"))
+  on.exit(par(opar))
+  
+  dev.off()
+}
+```
+
+## 3) Combine and compare temporal trends of ligand and target/receptor genes
+
+**Base plot**
+```{r}
+plot_combined_trends <- function(ligand_celltype, target_celltype, ligand, target){
+  logCPM.obs.i.ligand <- logCPM.obs[ligand_celltype,]
+  logCPM.fit.i.ligand <- logCPM.fit[ligand_celltype,]
+  logCPM.obs.i.target <- logCPM.obs[target_celltype,]
+  logCPM.fit.i.target <- logCPM.fit[target_celltype,]
+  
+  plot_title <- paste(ligand_celltype, "->", target_celltype)
+  GR_potential <- paste0("gr_potential: ", active_ligand_target_links[target, ligand])
+  ymin <- min(min(logCPM.obs.i.ligand), min(logCPM.obs.i.target), min(logCPM.fit.i.ligand), min(logCPM.fit.i.target))
+  ymax <- max(max(logCPM.obs.i.ligand), max(logCPM.obs.i.target), max(logCPM.fit.i.ligand), max(logCPM.fit.i.target))
+    
+  plot(hours, logCPM.obs.i.ligand, ylab="log-CPM", ylim = c(ymin, ymax), main=plot_title, cex = 0.8, pch=16, col = rainbow(11)[factor(hours)])
+  lines(hours, logCPM.fit.i.ligand, col="red", lwd=2)
+  points(hours, logCPM.obs.i.target, pch=1, col = rainbow(11)[factor(hours)])
+  lines(hours, logCPM.fit.i.target, col="blue", lwd=2)
+  mtext(GR_potential, cex=0.7, line = 0.5)
+  legend("bottomright", bty = "n", inset = c(0, -0.7), legend = c("ligand.fit", "target.fit"), col = c("red", "blue"), lty = c(1, 1), xpd = TRUE)
+
+}
+
+```
+
+```{r}
+# par(mfrow=c(2,2), mar = c(4, 4.5, 4.5, 2))
+# for (i in 1:10){
+#   ligand <- ccf_matrix$ligand[i]
+#   target <- ccf_matrix$target[i]
+#   
+#   ligand_celltype <- paste0(ccf_matrix$ligand[i], "_", ccf_matrix$ligand_celltype[i])
+#   target_celltype <- paste0(ccf_matrix$target[i], "_", ccf_matrix$target_celltype[i])
+#       
+#   plot_combined_trends(ligand_celltype, target_celltype, ligand, target)
+# }
+```
+
+**ggplot**
+
+```{r}
+#install.packages("reshape2") 
+#install.packages("ggrepel")
+library(reshape2)
+library(ggrepel)
+plot_combined_trends_ggplot2 <- function(celltype_combinations, logCPM, sig_genes){
+  
+  target_celltype <- unique(paste0(celltype_combinations$target, "_", celltype_combinations$target_celltype))
+  ligand_celltype <- paste0(celltype_combinations$ligand, "_", celltype_combinations$ligand_celltype)
+  
+  colnames(logCPM) <- hours
+  logCPM_ggplot <- logCPM %>% rownames_to_column(var = "gene_celltype")
+  
+  # create a data frame for ggplot
+  ## Ligand_celltype that exists in logCPM (lowly expressed genes are filtered out)
+  prep_ggplot <- melt(logCPM_ggplot[which(rownames(logCPM) %in% c(ligand_celltype, target_celltype)),], id = "gene_celltype")
+  prep_ggplot[which(prep_ggplot$gene_celltype %in% ligand_celltype),"LigandTarget"] <- "ligand"
+  prep_ggplot[which(prep_ggplot$gene_celltype %in% target_celltype),"LigandTarget"] <- "target"
+  prep_ggplot[, "Significance"] <- ifelse(prep_ggplot$gene_celltype %in% sig_genes, "sig", "insig")
+  
+  # ggplot
+  combined_trend_ggplot2 <- ggplot(prep_ggplot, aes(x = variable, y = value)) + 
+    geom_line(aes(group = gene_celltype, colour = gene_celltype, size = LigandTarget, linetype = Significance)) + 
+    scale_size_manual(values = c(target = 3, ligand = 0.5)) +
+    scale_linetype_manual(values = c("sig" = "solid", "insig" = "dashed")) +
+    guides(colour = "none") +
+    coord_cartesian(clip = "off") +
+    theme_bw() +
+    theme(legend.position = "top", plot.margin = margin(0.1, 2.6, 0.1, 0.1, "cm"), plot.title = element_text(hjust = 0.5)) +
+    geom_text_repel(data = filter(prep_ggplot, variable == max(hours)), aes(label = gene_celltype, color = gene_celltype), direction = "y", hjust = -0.2, cex = 3.5, segment.color = "grey50", xlim = c(-100, 100))+ 
+    labs(title = paste0(unique(celltype_combinations$ligand), " -> ", unique(celltype_combinations$target), " (weight: ", unique(celltype_combinations$weight), ")"), x = "hours", y = "logCPM") 
+  
+  print(combined_trend_ggplot2)
+}
+```
+
+```{r}
+#par(mfrow=c(2,2), mar = c(4, 4.5, 4.5, 2))
+for (i in 1:10){
+  
+  ligand <- ccf_matrix_prep$ligand[i]
+  target <- ccf_matrix_prep$target[i]
+  
+  celltype_combinations <- ccf_matrix[which(ccf_matrix$ligand == ligand & ccf_matrix$target == target),1:5]
+  
+  pdf(file = paste(vis_path, ligand, "-", target, "combined_trend.pdf", sep=""), width = 12, height = 7)
+  plot_combined_trends_ggplot2(celltype_combinations, logCPM.obs, rownames(hepa_cluster))
+  dev.off()
+}
+```
+
+
+## 4) UMAP
+
+```{r}
+Plot_features <- function(gene, seurat_obj, geneID_convert) {
+  
+  # Change gene symbol to ENSEMBL to subset seurat object
+  ENSEMBL <- geneID_convert$ensembl_gene_id[which(geneID_convert$external_gene_name == gene)]
+
+  # UMAP highlighting cells with geneOI
+  feature_baseplot <- FeaturePlot(seurat_obj, features = ENSEMBL, min.cutoff = "q10", max.cutoff = "q90" ,label = TRUE, order = TRUE) + labs(title = gene)
+  
+  print(feature_baseplot)
+}
+```
+
+```{r, message=FALSE}
+#setwd("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet")
+
+# for (gene in order_targets){
+#   Plot_features(gene, hepa_celltypeOI, IDtoSymbol_matrix)
+# }
+```
+
+
+```{r}
+# Check if the gene is "expressed" in a cell type of a sample
+# gene <- "Lmnb1"
+# for (timepoint in experiments){
+#   for (receiver_celltype in celltype_OI){
+#       receiver_ids <- row.names(hepa_sample_info[which(hepa_sample_info$celltype == receiver_celltype & hepa_sample_info$time_experiment == timepoint),])
+#       expressed_genes_receiver_onetype <- colSums(hepa_expression[receiver_ids,] > 0) %>% sapply(function(x){x/length(receiver_ids)*100}) %>% .[. >= 10] %>% names()
+#       ifelse(!(gene %in% expressed_genes_receiver_onetype), print(paste0(gene, " not in ", receiver_celltype, " at ", timepoint)), NA)
+#   }
+# }
+```
+
+```{r}
+# # Check expression of the gene through time points
+# gene <- "Lmnb1"
+# ENSEMBL <- "ENSMUSG00000024590"
+# 
+# gene_subset <- subset(x = hepa_celltypeOI, subset = ENSMUSG00000024590 >= 1)
+# 
+# for (time in experiments){
+#   subset <- subset(x = gene_subset, subset = time_experiment == as.character(time))
+# 
+#   Dimplot <- DimPlot(hepa_celltypeOI, cells.highlight= list(Cells(subset)), sizes.highlight = 0.1, label = TRUE, label.size=3) + labs(title = paste0(gene, "_", time))
+#   print(Dimplot)
+# }
+```
+
+```{r}
+# Check expression "level" of the gene through time points
+# featureplot <- FeaturePlot(object = hepa_celltypeOI, features = "ENSMUSG00000024621", cells = Cells(subset))
+# print(featureplot)
+```
+
+
+
