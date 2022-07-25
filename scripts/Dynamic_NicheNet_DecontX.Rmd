@@ -45,9 +45,9 @@ Putative ligand-receptor links were gathered from NicheNet's ligand-receptor dat
 #lr_network = readRDS(url("https://zenodo.org/record/5884439/files/lr_network_mouse_21122021.rds")) # new version
 #lr_network = readRDS(url("https://zenodo.org/record/3260758/files/lr_network.rds")) # old version
 
-# # in case bad internet connection
-# lr_network = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/lr_network_mouse_21122021.rds")
-# head(lr_network)
+# in case bad internet connection
+lr_network = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/lr_network_mouse_21122021.rds")
+head(lr_network)
 ```
 
 ```{r cache=TRUE}
@@ -55,82 +55,82 @@ Putative ligand-receptor links were gathered from NicheNet's ligand-receptor dat
 #weighted_networks = readRDS(url("https://zenodo.org/record/5884439/files/weighted_networks_nsga2r_final_mouse.rds")) # New version
 #weighted_networks = readRDS(url("https://zenodo.org/record/3260758/files/weighted_networks.rds")) # Old version
 
-# # in case internet connection is bad
-# weighted_networks = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/weighted_networks_nsga2r_final_mouse.rds")
-# weighted_networks_lr = weighted_networks$lr_sig %>% inner_join(lr_network %>% distinct(from,to), by = c("from","to"))
-# head(weighted_networks$lr_sig)
-# head(weighted_networks$gr)
+# in case internet connection is bad
+weighted_networks = readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/weighted_networks_nsga2r_final_mouse.rds")
+weighted_networks_lr = weighted_networks$lr_sig %>% inner_join(lr_network %>% distinct(from,to), by = c("from","to"))
+head(weighted_networks$lr_sig)
+head(weighted_networks$gr)
 ```
 ## 2) Cluster Data
 Genes are clustered by their temporal trend in previous stage (DE analysis)
 ```{r cache=TRUE}
-# #hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_phase2.csv")
-# hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_DecontX.csv")
-# paged_table(head(hepa_cluster))
+#hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_phase2.csv")
+hepa_cluster <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_DecontX.csv")
+paged_table(head(hepa_cluster))
 ```
 
 ```{r}
-# # Preprocess cluster data
-# ## Assign clear rownames
-# rownames(hepa_cluster) <- NULL
-# hepa_cluster <- hepa_cluster %>% column_to_rownames(var="Row.names")
-# 
-# ## Add celltype & Symbol columns to cluster matrix
-# extract_geneID <- as.data.frame(str_split(rownames(hepa_cluster), "_", simplify=TRUE))
-# hepa_cluster$Symbol <- extract_geneID$V1
-# hepa_cluster$celltype <- extract_geneID$V2
-# paged_table(head(hepa_cluster))
+# Preprocess cluster data
+## Assign clear rownames
+rownames(hepa_cluster) <- NULL
+hepa_cluster <- hepa_cluster %>% column_to_rownames(var="Row.names")
+
+## Add celltype & Symbol columns to cluster matrix
+extract_geneID <- as.data.frame(str_split(rownames(hepa_cluster), "_", simplify=TRUE))
+hepa_cluster$Symbol <- extract_geneID$V1
+hepa_cluster$celltype <- extract_geneID$V2
+paged_table(head(hepa_cluster))
 ```
 
 ## 3) Temporal trend of genes with fitted/observed values
 ```{r cache=TRUE}
-# # Phase 2
-# # logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_phase2.csv")
-# # logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_phase2.csv")
-# 
-# # DecontX
-# logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv")
-# logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_DecontX.csv")
+# Phase 2
+# logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_phase2.csv")
+# logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_phase2.csv")
+
+# DecontX
+logCPM.obs = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv")
+logCPM.fit = read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_DecontX.csv")
 ```
 
 ## 4) Expression Data
 ```{r message=FALSE, cache=TRUE}
-# hepa_rds <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
-# sce <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sce_DecontX.rds")
+hepa_rds <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/seurat_obj_phx_25102021.rds")
+sce <- readRDS("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/sce_DecontX.rds")
 ```
 
 ```{r}
-# # Preprocess expression data
-# ## Subset to seven cell-types
-# celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
-# hepa_celltypeOI <- subset(x = hepa_rds, idents = celltype_OI)
-# 
-# ## Factorize experiment timepoint
-# #experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
-# #hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
-# experiments <- c("3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
-# hours <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
-# 
-# hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
-# hepa_celltypeOI = subset(x = hepa_celltypeOI, subset = time_experiment %in% experiments)
-# 
-# rm(hepa_rds)
+# Preprocess expression data
+## Subset to seven cell-types
+celltype_OI <- c("cholangiocyte","endothelial","hepatocyte","kupffer","monocyte","neutrophil","stellate")
+hepa_celltypeOI <- subset(x = hepa_rds, idents = celltype_OI)
+
+## Factorize experiment timepoint
+#experiments <- c("0_phase_1", "3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_1", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+#hours <- c(0, 3, 6, 12, 24, 36, 48, 48, 72, 96, 120, 168)
+experiments <- c("3_phase_2", "6_phase_2", "12_phase_2", "24_phase_2", "36_phase_2", "48_phase_2", "72_phase_2", "96_phase_2", "120_phase_2", "168_phase_2")
+hours <- c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+
+hepa_celltypeOI@meta.data$time_experiment <- factor(hepa_celltypeOI@meta.data$time_experiment, levels = experiments)
+hepa_celltypeOI = subset(x = hepa_celltypeOI, subset = time_experiment %in% experiments)
+
+rm(hepa_rds)
 ```
 
 ```{r}
-# library(celda)
-# hepa_sample_info <- colData(sce)
-# hepa_expression <- t(decontXcounts(sce))
+library(celda)
+hepa_sample_info <- colData(sce)
+hepa_expression <- t(decontXcounts(sce))
 ```
 
 ```{r cache=TRUE}
-# ## change ENSEMBL to gene symbol in column names
-# 
-# # library(biomaRt)
-# # ensembl <- useEnsembl(biomart="ensembl", dataset = "mmusculus_gene_ensembl")
-# # IDtoSymbol_matrix <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), filters = "ensembl_gene_id", values = unique(colnames(hepa_expression)), mart = ensembl)
-# 
-# IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
+## change ENSEMBL to gene symbol in column names
+
+# library(biomaRt)
+# ensembl <- useEnsembl(biomart="ensembl", dataset = "mmusculus_gene_ensembl")
+# IDtoSymbol_matrix <- getBM(attributes=c("ensembl_gene_id","external_gene_name"), filters = "ensembl_gene_id", values = unique(colnames(hepa_expression)), mart = ensembl)
+
+IDtoSymbol_matrix <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/IDtoSymbol_matrix.csv")
 ```
 
 ```{r}
