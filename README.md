@@ -3,6 +3,8 @@
 scripts
   - DE_pseudobulk_DecontX.rmd
   - Dynamic_NicheNet_pseudobulk_DecontX.rmd
+  - DE_pseudobulk_clusterPerCelltype.rmd
+  - Dynamic_NicheNet_pseudobulk_clusterPerCelltype.rmd
   
 Data
   - NicheNet v2.0 **Ligand-Target matrix and Networks** ([https://zenodo.org/record/5884439#.Yk2JcMhBxPZ](https://zenodo.org/record/5884439#.Yk2JcMhBxPZ))
