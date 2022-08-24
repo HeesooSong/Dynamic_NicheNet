@@ -2,7 +2,6 @@
 
 scripts
   - DE_pseudobulk_DecontX.rmd
-  - DE_PerTime.rmd
   - Dynamic_NicheNet_pseudobulk_DecontX.rmd
   - Dynamic_NicheNet_PerTime.rmd
   
