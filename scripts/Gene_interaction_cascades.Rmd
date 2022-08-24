@@ -1,0 +1,193 @@
+---
+title: "Gene_interaction_cascades"
+author: "Heesoo Song"
+date: '2022 8 11 '
+output: html_document
+---
+
+```{r}
+main_path = "C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/Dynamic_NicheNet_temp/Dynamic_NicheNet_clusterPerCelltype/"
+folder_base = "Dynamic_NicheNet_clusterPerCelltype_all_"
+celltype = c("cholangiocyte","cholangiocyte","endothelial","endothelial","hepatocyte","hepatocyte","kupffer","kupffer","monocyte","monocyte","neutrophil","stellate","stellate")
+cluster = c(1,2,1,2,1,2,1,2,1,2,1,1,2)
+```
+
+# 1. Cascades of NicheNet result (with top ligands and top targets)
+```{r}
+list_top_ligands <- list()
+list_top_targets <- list()
+for (i in 1:13){
+  file_path = paste0(main_path, folder_base, celltype[i], "_", cluster[i], "/")
+  top_targets <- readRDS(paste0(file_path, "top_targets.rds"))
+  top_ligands <- readRDS(paste0(file_path, "top_ligands.rds"))
+  
+  list_top_ligands[[paste0(celltype[i], "_", cluster[i])]] <- top_ligands
+  list_top_targets[[paste0(celltype[i], "_", cluster[i])]] <- top_targets
+}
+```
+
+```{r}
+list_cascades <- list()
+for (first in names(list_top_targets)){
+  for (second in names(list_top_ligands)){
+    intersecting_genes <- intersect(list_top_targets[[first]], list_top_ligands[[second]])
+    if (length(intersecting_genes) > 0){
+          list_cascades[[paste0(first, ".", second)]] <- intersecting_genes
+    }
+  }
+}
+```
+
+**Occurrence of ligand genes throughout analysis**
+```{r}
+top_ligands_mix <- c()
+for (i in 1:13){
+  top_ligands_mix <- append(top_ligands_mix, list_top_ligands[[i]])
+}
+```
+
+```{r}
+ligand_summary <- data.frame(table(top_ligands_mix))
+ligand_summary <- ligand_summary[order(-ligand_summary$Freq),]
+head(ligand_summary)
+```
+
+
+
+# 2. Cascades after filtering active ligand-target link with cell type information
+
+```{r}
+list_top_ligands_celltype <- list()
+list_top_targets_celltype <- list()
+list_ccf <- list()
+for (i in 1:13){
+  file_path = paste0(main_path, folder_base, celltype[i], "_", cluster[i], "/")
+  active_links_celltype <- readRDS(paste0(file_path, "ccf_active_ligand_target_links_celltype.rds"))
+  active_ligand_celltype <- active_links_celltype$ligand_celltype_combi
+  active_target_celltype <- paste0(active_links_celltype$target, "_", active_links_celltype$target_celltype)
+
+  list_top_ligands_celltype[[paste0(celltype[i], "_", cluster[i])]] <- active_ligand_celltype
+  list_top_targets_celltype[[paste0(celltype[i], "_", cluster[i])]] <- unique(active_target_celltype)
+  list_ccf[[paste0(celltype[i], "_", cluster[i])]] <- active_links_celltype
+}
+```
+
+```{r}
+list_cascades_celltype <- list()
+for (first in names(list_top_targets_celltype)){
+  for (second in names(list_top_ligands_celltype)){
+    intersecting_genes_celltype <- intersect(list_top_targets_celltype[[first]], list_top_ligands_celltype[[second]])
+    if (length(intersecting_genes_celltype) > 0){
+          list_cascades_celltype[[paste0(first, ".", second)]] <- intersecting_genes_celltype
+    }
+  }
+}
+```
+
+**Number of unique targets per analysis**
+```{r}
+unique_targets <- c()
+for (i in 1:13){
+  length_unique <- length(unique(list_top_targets_celltype[[i]]))
+  unique_targets <- c(unique_targets, length_unique)
+}
+unique_targets
+```
+**If you want to examine final potential interactions**
+```{r}
+potential_interactions <- data.frame(list_ccf[["stellate_1"]])
+potential_interactions[which(potential_interactions$ligand == "Angptl4"),1:5]
+```
+
+**Number of interactions with specific ligand/target gene**
+```{r}
+number_interactions_vector <- c()
+ligand_celltype_vector <- c()
+list_interactions <- list()
+for (i in 1:13){
+  potential_interactions <- data.frame(list_ccf[[i]])
+  number_interactions <- potential_interactions[which(potential_interactions$ligand == "Tnf"),1:5]
+  number_interactions_vector <- c(number_interactions_vector, dim(number_interactions)[1])
+  ligand_celltype_vector <- c(ligand_celltype_vector, number_interactions$ligand_celltype)
+  list_interactions[[names(list_ccf)[i]]] <- number_interactions
+}
+number_interactions_vector
+sum(number_interactions_vector)
+table(ligand_celltype_vector)
+```
+
+```{r}
+list_interactions[[7]]
+```
+
+
+
+# 3. Plot gene expression of gene cascade (cascade genes defined by user)
+```{r}
+library(reshape2)
+library(ggrepel)
+plot_cascade_trends <- function(celltype_combinations, logCPM){
+
+  colnames(logCPM) <- hours
+  logCPM_ggplot <- logCPM %>% rownames_to_column(var = "gene_celltype")
+
+  # create a data frame for ggplot
+  ## Ligand_celltype that exists in logCPM (lowly expressed genes are filtered out)
+  prep_ggplot <- melt(logCPM_ggplot[which(rownames(logCPM) %in% gene_celltype_vector),], id = "gene_celltype")
+
+  # ggplot
+  combined_trend_ggplot2 <- ggplot(prep_ggplot, aes(x = variable, y = value)) +
+    geom_line(aes(group = gene_celltype, colour = gene_celltype), size = 1) +
+    guides(colour = "none") +
+    coord_cartesian(clip = "off") +
+    theme_bw() +
+    theme(legend.position = "top", 
+          plot.margin = margin(0.1, 2.6, 0.1, 0.1, "cm"), 
+          plot.title = element_text(hjust = 0.5),
+          panel.border = element_blank(),
+          axis.line = element_line(colour = "black")) +
+    geom_text_repel(data = filter(prep_ggplot, variable == max(hours)), 
+                    aes(label = gene_celltype, color = gene_celltype), 
+                    direction = "y", 
+                    hjust = -0.2, 
+                    cex = 3.5, 
+                    segment.color = "grey50", 
+                    xlim = c(-100, 100))+
+    labs(title = "Gene Cascades", x = "hours", y = "logCPM")
+
+  print(combined_trend_ggplot2)
+}
+```
+
+```{r}
+hours = c(3, 6, 12, 24, 36, 48, 72, 96, 120, 168)
+logCPM.obs <- read.csv("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv")
+```
+
+```{r}
+gene_celltype_vector <- c("Ccn4_stellate", "Tgfb1_stellate", "Angptl4_hepatocyte", "Itga5_hepatocyte")
+
+#par(mfrow=c(2,2), mar = c(4, 4.5, 4.5, 2))
+#pdf(file = paste(main_path, "cascade_trend.pdf", sep=""), width = 12, height = 7)
+plot_cascade_trends(gene_celltype_vector, logCPM.obs)
+#dev.off()
+```
+
+# 4. Plot CCF
+```{r}
+ligand_celltype <- "Tgfb1_stellate"
+target_celltype <- "Angptl4_hepatocyte"
+
+logCPM.obs.i.ligand <- unlist(logCPM.obs[ligand_celltype,], use.names = FALSE)
+logCPM.obs.i.target <- unlist(logCPM.obs[target_celltype,], use.names = FALSE)
+
+
+#pdf(file = paste(vis_path, ligand_celltype, "_", target_celltype, "_correlation.pdf", sep=""), width = 12, height = 7)
+#opar <- par(no.readonly = TRUE)
+par(mar = c(4, 4.5, 4.5, 2))
+ccf(logCPM.obs.i.ligand, logCPM.obs.i.target, main = paste0(ligand_celltype, "(ligand) & ", target_celltype, "(target)"))
+
+#on.exit(par(opar))
+#dev.off()
+```
+

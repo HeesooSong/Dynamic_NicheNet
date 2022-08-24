@@ -193,7 +193,7 @@ The aim is to examine the relationship between gene abundances and time points p
 
 Perform DE analysis
 
-Explore aggregated count data by MDS (multi-dimensional scaling) plots. This visualizes the differences between the expression profiles of different samples (cholangiocyte) in two dimensions.
+Explore aggregated count data by MDS (multi-dimensional scaling) plots. This visualizes the differences between the expression profiles of different samples in two dimensions.
 ```{r}
 library(edgeR)
 ```
@@ -268,6 +268,9 @@ head(tab)
 
 LogFC = log fold change, log difference between groups.
 LogCPM = log count per million, measure of expression level.
+```{r}
+# write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_tab_phase2.csv", sep = ",")
+```
 
 
 ```{r}
@@ -276,8 +279,8 @@ logCPM.fit <- edgeR::cpm(fit, log=TRUE)
 ```
 
 ```{r}
-# write.table(logCPM.obs, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_DecontX.csv", sep = ",")
-# write.table(logCPM.fit, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_DecontX.csv", sep = ",")
+# write.table(logCPM.obs, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-obs_phase2.csv", sep = ",")
+# write.table(logCPM.fit, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_logCPM-fit_phase2.csv", sep = ",")
 
 ```
 

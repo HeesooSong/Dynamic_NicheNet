@@ -221,6 +221,9 @@ head(tab)
 LogFC = log fold change, log difference between groups.
 LogCPM = log count per million, measure of expression level.
 
+```{r}
+# write.table(tab, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_geneID+celltype_tab_DecontX.csv", sep = ",")
+```
 
 ```{r}
 logCPM.obs <- edgeR::cpm(y, log=TRUE, prior.count=fit$prior.count)
@@ -269,7 +272,7 @@ sig_norm.fit$celltype <- str_split(rownames(sig_norm.fit), "_", simplify=TRUE)[,
 ### Calculate distance
 ```{r}
 # Filter sig_norm with one cell type
-celltype = celltype_OI[7]
+celltype = celltype_OI[6]
 
 sig_norm_onecelltype.obs <- sig_norm.obs[sig_norm.obs$celltype == celltype,]
 
@@ -278,10 +281,10 @@ gene_dist.obs <- Dist(sig_norm_onecelltype.obs[,experiments], method="spearman")
 gene_hclust.obs <- hclust(gene_dist.obs, method = "ward.D2")
 
 ######################################
-sig_norm_onecelltype.fit <- sig_norm.fit[sig_norm.fit$celltype == celltype,]
-
-gene_dist.fit <- Dist(sig_norm_onecelltype.fit[,experiments], method="spearman")
-gene_hclust.fit <- hclust(gene_dist.fit, method = "ward.D2")
+# sig_norm_onecelltype.fit <- sig_norm.fit[sig_norm.fit$celltype == celltype,]
+# 
+# gene_dist.fit <- Dist(sig_norm_onecelltype.fit[,experiments], method="spearman")
+# gene_hclust.fit <- hclust(gene_dist.fit, method = "ward.D2")
 ```
 
 
@@ -292,7 +295,7 @@ gene_hclust.fit <- hclust(gene_dist.fit, method = "ward.D2")
 The height of the dendrogram indicates the order in which the clusters were joined. A more informative dendrogram can be created where the heights reflect the distance between the clusters.
 ```{r}
 plot(gene_hclust.obs, labels=FALSE, hang=-1, main = paste0("Cluster Dendrogram : ", celltype, " (obs)"))
-plot(gene_hclust.fit, labels=FALSE, hang=-1, main = paste0("Cluster Dendrogram : ", celltype, " (fit)"))
+# plot(gene_hclust.fit, labels=FALSE, hang=-1, main = paste0("Cluster Dendrogram : ", celltype, " (fit)"))
 ```
 
 
@@ -309,20 +312,20 @@ for (num_cluster in 2:10){
 }
 
 #################################
-# Determine the best number of clusters
-sil_coef_vector.fit <- c()
-for (num_cluster in 2:10){
-  sil_cutree.fit <- cutree(gene_hclust.fit, k = num_cluster)
-  sil_cl.fit <- silhouette(sil_cutree.fit ,gene_dist.fit)
-  sil_cl_summary.fit <- summary(sil_cl.fit)
-  sil_coefficient.fit <- as.vector(sil_cl_summary.fit$si.summary["Mean"])
-  sil_coef_vector.fit <- c(sil_coef_vector.fit, sil_coefficient.fit)
-}
+# # Determine the best number of clusters
+# sil_coef_vector.fit <- c()
+# for (num_cluster in 2:10){
+#   sil_cutree.fit <- cutree(gene_hclust.fit, k = num_cluster)
+#   sil_cl.fit <- silhouette(sil_cutree.fit ,gene_dist.fit)
+#   sil_cl_summary.fit <- summary(sil_cl.fit)
+#   sil_coefficient.fit <- as.vector(sil_cl_summary.fit$si.summary["Mean"])
+#   sil_coef_vector.fit <- c(sil_coef_vector.fit, sil_coefficient.fit)
+# }
 ```
 
 ```{r}
 plot(2:10,sil_coef_vector.obs,"b", xlab="k", ylab="silhouette coefficient", main = "logCPM.obs")
-plot(2:10,sil_coef_vector.fit,"b", xlab="k", ylab="silhouette coefficient", main = "logCPM.fit")
+# plot(2:10,sil_coef_vector.fit,"b", xlab="k", ylab="silhouette coefficient", main = "logCPM.fit")
 ```
 
 
@@ -334,16 +337,17 @@ colnames(gene_cluster.obs) <- c("gene", "cluster_number")
 head(gene_cluster.obs)
 
 ######################################
-gene_cluster.fit <- data.frame(cutree(gene_hclust.fit, k = 2)) %>%
-  rownames_to_column()
-colnames(gene_cluster.fit) <- c("gene", "cluster_number")
+# gene_cluster.fit <- data.frame(cutree(gene_hclust.fit, k = 2)) %>%
+#   rownames_to_column()
+# colnames(gene_cluster.fit) <- c("gene", "cluster_number")
 ```
 
 ### Save cluster number as csv
 ```{r}
-# cluster_number_merged <- merge(x = tab[1:sig_num[2],], y = gene_cluster, by.x = 0 , by.y = "gene", all = TRUE)
+cluster_number_merged <- merge(x = tab[1:sig_num[2],], y = gene_cluster.obs, by.x = 0 , by.y = "gene", all = TRUE)
+cluster_number_merged <- cluster_number_merged[!is.na(cluster_number_merged$cluster_number),]
 
-# write.table(cluster_number_merged, file="C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_DecontX_obs.csv", sep = ",")
+#write.table(cluster_number_merged, file=paste0("C:/Users/pc/Desktop/MastersProject/Dynamic_NicheNet/DE_pseudobulk_cluster_", celltype, ".csv"), sep = ",")
 ```
 
 ### General cluster shape (obs)
@@ -365,9 +369,9 @@ for(i in 1:2) {
     geom_line(aes(x = time, y = average), size = 2) +
     geom_point(aes(x = time, y = average)) +
     scale_x_continuous(breaks = hours) +
-    labs(title = paste0("Cluter ", i, "(obs) : ", length(cluster_genes.obs), " genes")) +
+    labs(title = paste0("Cluster ", i, "(obs) : ", length(cluster_genes.obs), " genes")) +
     theme_bw() +
-    theme(plot.title = element_text(size=15, hjust=0.5))
+    theme(plot.title = element_text(size=30, hjust=0.5))
   print(cluster_exp_plot.obs)
   
 }

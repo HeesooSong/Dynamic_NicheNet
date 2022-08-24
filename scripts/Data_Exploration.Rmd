@@ -186,8 +186,9 @@ aggregate(time_type.freq$freq, by=list(Category=time_type.freq$time), FUN=sum)
 time_type.plot <- ggplot(time_type.freq, aes(x = time, y = freq, fill = type)) + 
   geom_bar(stat = "identity") +
   geom_text(aes(label = freq), position = position_stack(vjust = 0.5), size = 3) +
-  ggtitle("Cell-type frequencies in each timepoint") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  labs(title = "Cell-type frequency per timepoint", y = "Number of Cells") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), plot.title = element_text(hjust = 0.5, face = "bold"))
 
 time_type.plot
 ```
